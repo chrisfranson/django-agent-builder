@@ -15,6 +15,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Profile,
     Revision,
 )
 
@@ -418,3 +419,44 @@ class TestRevisionModel:
         )
         user.delete()
         assert Revision.objects.count() == 0
+
+
+class TestProfileModel:
+    @pytest.mark.django_db
+    def test_create_profile(self, user):
+        profile = Profile.objects.create(
+            name="production-config",
+            description="Production agent configuration",
+            snapshot={"agents": [], "chunks": [], "instructions": []},
+            user=user,
+        )
+        assert profile.name == "production-config"
+        assert profile.snapshot["agents"] == []
+        assert str(profile) == "production-config"
+
+    @pytest.mark.django_db
+    def test_profile_name_unique_per_user(self, user):
+        Profile.objects.create(
+            name="config-v1",
+            snapshot={},
+            user=user,
+        )
+        with pytest.raises(IntegrityError):
+            Profile.objects.create(
+                name="config-v1",
+                snapshot={},
+                user=user,
+            )
+
+    @pytest.mark.django_db
+    def test_profiles_ordered_by_name(self, user):
+        Profile.objects.create(name="zebra", snapshot={}, user=user)
+        Profile.objects.create(name="alpha", snapshot={}, user=user)
+        names = list(Profile.objects.filter(user=user).values_list("name", flat=True))
+        assert names == ["alpha", "zebra"]
+
+    @pytest.mark.django_db
+    def test_profile_cascade_on_user_delete(self, user):
+        Profile.objects.create(name="config", snapshot={}, user=user)
+        user.delete()
+        assert Profile.objects.count() == 0

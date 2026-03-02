@@ -197,6 +197,29 @@ class AgentInstruction(models.Model):
         return f"{self.agent.name} / {self.instruction.name} ({mode})"
 
 
+class Profile(models.Model):
+    """A full system state snapshot for experimentation and rollback."""
+
+    name = models.SlugField(max_length=255, help_text="Profile identifier")
+    description = models.TextField(blank=True, help_text="Profile description")
+    snapshot = models.JSONField(help_text="Full system state snapshot")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profiles",
+        help_text="Owner of this profile",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [["user", "name"]]
+        indexes = [models.Index(fields=["user", "name"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Revision(models.Model):
     """A content snapshot for revision tracking (generic across models)."""
 
