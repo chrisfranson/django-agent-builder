@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 
-from .models import Agent, AgentChunk, Chunk
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
 
 
 class ChunkSerializer(serializers.ModelSerializer):
@@ -24,8 +24,36 @@ class AgentChunkSerializer(serializers.ModelSerializer):
         read_only_fields = ["active_variant"]
 
 
+class InstructionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Instruction
+        fields = [
+            "id",
+            "name",
+            "display_name",
+            "content",
+            "injection_mode",
+            "user",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["user", "created_at", "updated_at"]
+
+
+class AgentInstructionSerializer(serializers.ModelSerializer):
+    instruction = InstructionSerializer(read_only=True)
+    instruction_id = serializers.PrimaryKeyRelatedField(
+        queryset=Instruction.objects.all(), source="instruction", write_only=True
+    )
+
+    class Meta:
+        model = AgentInstruction
+        fields = ["id", "instruction", "instruction_id", "injection_mode"]
+
+
 class AgentSerializer(serializers.ModelSerializer):
     agent_chunks = AgentChunkSerializer(many=True, read_only=True)
+    agent_instructions = AgentInstructionSerializer(many=True, read_only=True)
 
     class Meta:
         model = Agent
@@ -40,6 +68,7 @@ class AgentSerializer(serializers.ModelSerializer):
             "is_active",
             "user",
             "agent_chunks",
+            "agent_instructions",
             "created_at",
             "updated_at",
         ]

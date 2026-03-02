@@ -5,12 +5,14 @@ Tests for agent_builder serializers.
 import pytest
 from django.contrib.auth import get_user_model
 
-from agent_builder.models import Agent, AgentChunk, Chunk
+from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
 from agent_builder.serializers import (
     AgentChunkSerializer,
+    AgentInstructionSerializer,
     AgentListSerializer,
     AgentSerializer,
     ChunkSerializer,
+    InstructionSerializer,
 )
 
 User = get_user_model()
@@ -87,3 +89,38 @@ class TestAgentChunkSerializer:
         assert data["position"] == 0
         assert data["is_enabled"] is True
         assert data["chunk"]["title"] == "Test Chunk"
+
+
+@pytest.mark.django_db
+class TestInstructionSerializer:
+    def test_serialize_instruction(self, user):
+        instruction = Instruction.objects.create(
+            name="coding-standards",
+            display_name="Coding Standards",
+            content="Follow PEP 8.",
+            injection_mode="on_demand",
+            user=user,
+        )
+        data = InstructionSerializer(instruction).data
+        assert data["name"] == "coding-standards"
+        assert data["injection_mode"] == "on_demand"
+        assert "user" in data
+        assert "created_at" in data
+
+
+@pytest.mark.django_db
+class TestAgentInstructionSerializer:
+    def test_serialize_agent_instruction(self, user):
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards", display_name="Standards", content="content", user=user
+        )
+        ai = AgentInstruction.objects.create(
+            agent=agent, instruction=instruction, injection_mode="auto_inject"
+        )
+        data = AgentInstructionSerializer(ai).data
+        assert data["instruction"]["name"] == "standards"
+        assert data["injection_mode"] == "auto_inject"
+        assert "instruction_id" not in data  # write-only
