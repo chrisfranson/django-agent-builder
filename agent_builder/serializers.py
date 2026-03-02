@@ -2,7 +2,13 @@
 
 from rest_framework import serializers
 
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
+
+
+class ChunkVariantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChunkVariant
+        fields = ["id", "label", "content", "position"]
 
 
 class ChunkSerializer(serializers.ModelSerializer):

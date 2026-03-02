@@ -5,13 +5,21 @@ Tests for agent_builder serializers.
 import pytest
 from django.contrib.auth import get_user_model
 
-from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from agent_builder.models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+)
 from agent_builder.serializers import (
     AgentChunkSerializer,
     AgentInstructionSerializer,
     AgentListSerializer,
     AgentSerializer,
     ChunkSerializer,
+    ChunkVariantSerializer,
     InstructionSerializer,
 )
 
@@ -89,6 +97,38 @@ class TestAgentChunkSerializer:
         assert data["position"] == 0
         assert data["is_enabled"] is True
         assert data["chunk"]["title"] == "Test Chunk"
+
+
+@pytest.mark.django_db
+class TestChunkVariantSerializer:
+    def test_serialize_chunk_variant(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="gentle version", position=0
+        )
+        serializer = ChunkVariantSerializer(variant)
+        data = serializer.data
+        assert data["id"] == variant.pk
+        assert data["label"] == "gentle"
+        assert data["content"] == "gentle version"
+        assert data["position"] == 0
+
+    def test_deserialize_chunk_variant(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        data = {"label": "firm", "content": "firm version", "position": 1}
+        serializer = ChunkVariantSerializer(data=data)
+        assert serializer.is_valid(), serializer.errors
+        variant = serializer.save(chunk=chunk)
+        assert variant.label == "firm"
+        assert variant.chunk == chunk
+
+    def test_chunk_variant_read_only_fields(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="content", position=0
+        )
+        serializer = ChunkVariantSerializer(variant)
+        assert "chunk" not in serializer.data  # chunk set via URL nesting, not serializer
 
 
 @pytest.mark.django_db
