@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -193,3 +195,29 @@ class AgentInstruction(models.Model):
     def __str__(self) -> str:
         mode = self.get_effective_mode()
         return f"{self.agent.name} / {self.instruction.name} ({mode})"
+
+
+class Revision(models.Model):
+    """A content snapshot for revision tracking (generic across models)."""
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey("content_type", "object_id")
+    content_snapshot = models.JSONField(help_text="Snapshot of content fields at this revision")
+    message = models.CharField(max_length=255, blank=True, help_text="Optional revision message")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="revisions",
+        help_text="User who created this revision",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["content_type", "object_id"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Revision for {self.content_type} #{self.object_id} at {self.created_at}"

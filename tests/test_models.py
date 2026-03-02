@@ -4,6 +4,7 @@ Tests for agent_builder models.
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 
@@ -14,6 +15,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Revision,
 )
 
 User = get_user_model()
@@ -333,3 +335,86 @@ class TestActiveVariantValidation:
         )
         ac = AgentChunk(agent=agent, chunk=chunk, position=0, active_variant=variant)
         ac.clean()  # Should not raise
+
+
+@pytest.mark.django_db
+class TestRevisionModel:
+    def test_create_revision_for_chunk(self, user):
+        chunk = Chunk.objects.create(title="Test", content="original", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "original"},
+            user=user,
+        )
+        assert revision.content_object == chunk
+        assert revision.content_snapshot["content"] == "original"
+
+    def test_create_revision_for_instruction(self, user):
+        instruction = Instruction.objects.create(
+            name="test", display_name="Test", content="v1", user=user
+        )
+        ct = ContentType.objects.get_for_model(Instruction)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=instruction.pk,
+            content_snapshot={"name": "test", "content": "v1"},
+            user=user,
+        )
+        assert revision.content_object == instruction
+
+    def test_revision_ordering(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        r1 = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "v1"},
+            user=user,
+        )
+        r2 = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "v2"},
+            user=user,
+        )
+        revisions = list(Revision.objects.filter(content_type=ct, object_id=chunk.pk))
+        # Most recent first
+        assert revisions[0].pk == r2.pk
+        assert revisions[1].pk == r1.pk
+
+    def test_revision_with_message(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "content"},
+            message="Initial version",
+            user=user,
+        )
+        assert revision.message == "Initial version"
+
+    def test_revision_str(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "content"},
+            user=user,
+        )
+        assert str(chunk.pk) in str(revision)
+
+    def test_revision_cascade_on_user_delete(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "content"},
+            user=user,
+        )
+        user.delete()
+        assert Revision.objects.count() == 0
