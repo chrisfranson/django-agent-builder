@@ -4,9 +4,17 @@ Tests for agent_builder models.
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 
-from agent_builder.models import Agent, AgentChunk, Chunk
+from agent_builder.models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+)
 
 User = get_user_model()
 
@@ -112,3 +120,189 @@ class TestAgentChunkModel:
         AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
         assert agent.chunks.count() == 1
         assert agent.chunks.first() == chunk
+
+
+@pytest.mark.django_db
+class TestEdgeCases:
+    """Edge-case and cascade tests for models."""
+
+    def test_agent_long_name(self):
+        """Agent name field accepts max length (255 chars)."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        long_name = "a" * 255
+        agent = Agent.objects.create(
+            name=long_name, display_name="Long", source="claude", user=user
+        )
+        agent.refresh_from_db()
+        assert len(agent.name) == 255
+
+    def test_chunk_empty_title_str(self):
+        """Chunk with no title shows 'Chunk #N' in __str__."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        chunk = Chunk.objects.create(content="content", user=user)
+        assert str(chunk) == f"Chunk #{chunk.pk}"
+        assert chunk.pk is not None
+
+    def test_agent_chunk_position_zero(self):
+        """AgentChunk can have position=0."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(name="agent", display_name="Agent", source="claude", user=user)
+        chunk = Chunk.objects.create(content="c", user=user)
+        ac = AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+        assert ac.position == 0
+
+    def test_chunk_variant_creation(self):
+        """ChunkVariant can be created and links to parent chunk."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        chunk = Chunk.objects.create(title="Greeting", content="Hello", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="Hi there, friend!", position=0
+        )
+        assert variant.chunk == chunk
+        assert variant.label == "gentle"
+        assert str(variant) == "Greeting / gentle"
+        assert chunk.variants.count() == 1
+
+    def test_cascade_delete_user(self):
+        """Deleting a user cascades to their agents and chunks."""
+        user = User.objects.create_user(username="cascade_user", password="testpass")
+        agent = Agent.objects.create(name="agent", display_name="Agent", source="claude", user=user)
+        chunk = Chunk.objects.create(content="c", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        user_pk = user.pk
+        user.delete()
+
+        assert Agent.objects.filter(user_id=user_pk).count() == 0
+        assert Chunk.objects.filter(user_id=user_pk).count() == 0
+        assert AgentChunk.objects.count() == 0
+
+    def test_cascade_delete_chunk(self):
+        """Deleting a chunk cascades to AgentChunk rows."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(name="agent", display_name="Agent", source="claude", user=user)
+        chunk = Chunk.objects.create(content="c", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        chunk.delete()
+        assert AgentChunk.objects.filter(agent=agent).count() == 0
+        # Agent itself still exists
+        assert Agent.objects.filter(pk=agent.pk).exists()
+
+    def test_agent_chunks_m2m_access(self):
+        """Agent.chunks M2M provides access to related chunks through AgentChunk."""
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(name="agent", display_name="Agent", source="claude", user=user)
+        chunk1 = Chunk.objects.create(title="A", content="a", user=user)
+        chunk2 = Chunk.objects.create(title="B", content="b", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk1, position=0)
+        AgentChunk.objects.create(agent=agent, chunk=chunk2, position=1)
+
+        assert agent.chunks.count() == 2
+        assert set(agent.chunks.all()) == {chunk1, chunk2}
+        # Verify the reverse -- chunk.agent_set not available, but agent_chunks is
+        assert chunk1.agent_chunks.count() == 1
+        assert chunk1.agent_chunks.first().agent == agent
+
+
+@pytest.mark.django_db
+class TestInstructionModel:
+    def test_create_instruction(self, user):
+        instruction = Instruction.objects.create(
+            name="standards",
+            display_name="Coding Standards",
+            content="## Standards\nFollow PEP8.",
+            injection_mode="on_demand",
+            user=user,
+        )
+        assert instruction.name == "standards"
+        assert instruction.display_name == "Coding Standards"
+        assert instruction.injection_mode == "on_demand"
+        assert str(instruction) == "standards"
+
+    def test_instruction_auto_inject(self, user):
+        instruction = Instruction.objects.create(
+            name="always-on",
+            display_name="Always On",
+            content="Always active content.",
+            injection_mode="auto_inject",
+            user=user,
+        )
+        assert instruction.injection_mode == "auto_inject"
+
+    def test_instruction_name_unique_per_user(self, user):
+        Instruction.objects.create(name="dupe", display_name="Dupe", content="c", user=user)
+        with pytest.raises(IntegrityError):
+            Instruction.objects.create(name="dupe", display_name="Dupe 2", content="c2", user=user)
+
+    def test_instructions_ordered_by_name(self, user):
+        Instruction.objects.create(name="zebra", display_name="Zebra", content="z", user=user)
+        Instruction.objects.create(name="alpha", display_name="Alpha", content="a", user=user)
+        instructions = list(Instruction.objects.filter(user=user))
+        assert instructions[0].name == "alpha"
+        assert instructions[1].name == "zebra"
+
+
+@pytest.mark.django_db
+class TestAgentInstructionModel:
+    def test_agent_instruction_creation(self, user):
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards",
+            display_name="Standards",
+            content="c",
+            injection_mode="on_demand",
+            user=user,
+        )
+        ai = AgentInstruction.objects.create(
+            agent=agent, instruction=instruction, injection_mode="auto_inject"
+        )
+        assert ai.get_effective_mode() == "auto_inject"
+        assert str(ai) == "test-agent / standards (auto_inject)"
+
+    def test_agent_instruction_default_mode(self, user):
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards",
+            display_name="Standards",
+            content="c",
+            injection_mode="on_demand",
+            user=user,
+        )
+        ai = AgentInstruction.objects.create(
+            agent=agent, instruction=instruction, injection_mode=""
+        )
+        assert ai.get_effective_mode() == "on_demand"
+        assert str(ai) == "test-agent / standards (on_demand)"
+
+    def test_agent_instruction_unique_together(self, user):
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards",
+            display_name="Standards",
+            content="c",
+            user=user,
+        )
+        AgentInstruction.objects.create(agent=agent, instruction=instruction)
+        with pytest.raises(IntegrityError):
+            AgentInstruction.objects.create(agent=agent, instruction=instruction)
+
+    def test_cross_user_validation(self, user, admin_user):
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards",
+            display_name="Standards",
+            content="c",
+            user=admin_user,
+        )
+        ai = AgentInstruction(agent=agent, instruction=instruction)
+        with pytest.raises(ValidationError):
+            ai.clean()

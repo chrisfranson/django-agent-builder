@@ -36,6 +36,7 @@ class Agent(models.Model):
         help_text="Owner of this agent",
     )
     chunks = models.ManyToManyField("Chunk", through="AgentChunk", blank=True)
+    instructions = models.ManyToManyField("Instruction", through="AgentInstruction", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -117,3 +118,75 @@ class AgentChunk(models.Model):
 
     def __str__(self) -> str:
         return f"{self.agent.name} / {self.chunk} @ {self.position}"
+
+
+class Instruction(models.Model):
+    """A reusable instruction block that can be attached to agents."""
+
+    INJECTION_MODE_CHOICES = [
+        ("on_demand", "On Demand"),
+        ("auto_inject", "Auto Inject"),
+    ]
+
+    name = models.SlugField(max_length=255, help_text="URL-safe instruction identifier")
+    display_name = models.CharField(max_length=255, help_text="Human-readable name")
+    content = models.TextField(help_text="Instruction content (Markdown)")
+    injection_mode = models.CharField(
+        max_length=20,
+        choices=INJECTION_MODE_CHOICES,
+        default="on_demand",
+        help_text="Default injection mode for this instruction",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="instructions",
+        help_text="Owner of this instruction",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [["user", "name"]]
+        indexes = [models.Index(fields=["user", "name"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class AgentInstruction(models.Model):
+    """Through table linking agents to their instructions."""
+
+    INJECTION_MODE_CHOICES = [
+        ("", "Use Default"),
+        ("on_demand", "On Demand"),
+        ("auto_inject", "Auto Inject"),
+    ]
+
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name="agent_instructions")
+    instruction = models.ForeignKey(
+        Instruction, on_delete=models.CASCADE, related_name="agent_instructions"
+    )
+    injection_mode = models.CharField(
+        max_length=20,
+        choices=INJECTION_MODE_CHOICES,
+        blank=True,
+        default="",
+        help_text="Override injection mode (blank = use instruction default)",
+    )
+
+    class Meta:
+        ordering = ["instruction__name"]
+        unique_together = [["agent", "instruction"]]
+
+    def get_effective_mode(self) -> str:
+        return self.injection_mode if self.injection_mode else self.instruction.injection_mode
+
+    def clean(self) -> None:
+        if self.agent_id and self.instruction_id and self.agent.user_id != self.instruction.user_id:
+            raise ValidationError("Agent and instruction must belong to the same user.")
+
+    def __str__(self) -> str:
+        mode = self.get_effective_mode()
+        return f"{self.agent.name} / {self.instruction.name} ({mode})"
