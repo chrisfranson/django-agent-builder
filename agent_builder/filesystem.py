@@ -8,6 +8,17 @@ from pathlib import Path
 
 from .models import Agent, AgentChunk
 
+# Config file scanning
+SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".tox", ".venv", "venv"}
+CONFIG_FILENAMES = {"CLAUDE.md", "AGENTS.md"}
+DEFAULT_SCAN_ROOTS = [
+    Path.home() / "Projects",
+    Path("/storage/Projects"),
+]
+DEFAULT_EXTRA_PATHS = [
+    Path.home() / ".claude" / "CLAUDE.md",
+]
+
 # Default paths
 DEFAULT_CLAUDE_AGENTS_DIR = Path.home() / ".claude" / "agents"
 DEFAULT_CODEROO_AGENTS_DIR = Path.home() / ".config" / "coderoo" / "agents"
@@ -176,3 +187,88 @@ def generate_coderoo_config(agent: Agent) -> dict:
             config["reminder"].append([ai.instruction.name, ai.instruction.display_name])
 
     return config
+
+
+def read_config_files(
+    scan_roots: list[Path] | None = None,
+    extra_paths: list[Path] | None = None,
+    max_depth: int = 3,
+) -> list[dict]:
+    """Scan for CLAUDE.md and AGENTS.md files.
+
+    Args:
+        scan_roots: Directories to recursively scan (up to max_depth).
+        extra_paths: Specific file paths to check directly.
+        max_depth: Maximum directory depth to scan.
+
+    Returns:
+        List of dicts with keys: filename, path, content.
+    """
+    roots = scan_roots if scan_roots is not None else DEFAULT_SCAN_ROOTS
+    extras = extra_paths if extra_paths is not None else DEFAULT_EXTRA_PATHS
+    seen_paths: set[str] = set()
+    results: list[dict] = []
+
+    # Check explicit extra paths first
+    for file_path in extras:
+        if file_path.is_file() and str(file_path) not in seen_paths:
+            try:
+                results.append(
+                    {
+                        "filename": file_path.name,
+                        "path": str(file_path),
+                        "content": file_path.read_text(),
+                    }
+                )
+                seen_paths.add(str(file_path))
+            except Exception:
+                continue
+
+    # Recursively scan roots
+    for root in roots:
+        if not root.is_dir():
+            continue
+        _scan_dir(root, 0, max_depth, seen_paths, results)
+
+    return results
+
+
+def _scan_dir(
+    directory: Path,
+    depth: int,
+    max_depth: int,
+    seen_paths: set[str],
+    results: list[dict],
+) -> None:
+    """Recursively scan a directory for config files."""
+    if depth >= max_depth:
+        return
+    try:
+        entries = sorted(directory.iterdir())
+    except PermissionError:
+        return
+    for entry in entries:
+        if entry.is_file() and entry.name in CONFIG_FILENAMES:
+            path_str = str(entry)
+            if path_str not in seen_paths:
+                try:
+                    results.append(
+                        {
+                            "filename": entry.name,
+                            "path": path_str,
+                            "content": entry.read_text(),
+                        }
+                    )
+                    seen_paths.add(path_str)
+                except Exception:
+                    continue
+        elif entry.is_dir() and entry.name not in SKIP_DIRS and not entry.name.startswith("."):
+            _scan_dir(entry, depth + 1, max_depth, seen_paths, results)
+
+
+def write_config_file(config_file) -> Path:
+    """Write a ConfigFile's content back to disk."""
+    target = Path(config_file.path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(config_file.content)
+    return target

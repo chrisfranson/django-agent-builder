@@ -8,9 +8,11 @@ from agent_builder.filesystem import (
     generate_coderoo_config,
     read_claude_agents,
     read_coderoo_agents,
+    read_config_files,
     read_instructions,
     render_agent,
     write_agent,
+    write_config_file,
     write_instruction,
 )
 from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
@@ -252,3 +254,91 @@ class TestCoderooConfigGeneration:
         assert config_path.exists()
         config = json.loads(config_path.read_text())
         assert "standards" in config["docs.include"]
+
+
+class TestReadConfigFiles:
+    def test_read_from_empty_dir(self, tmp_path):
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert result == []
+
+    def test_read_claude_md(self, tmp_path):
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# Instructions\nBe helpful.")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 1
+        assert result[0]["filename"] == "CLAUDE.md"
+        assert result[0]["path"] == str(claude_md)
+        assert result[0]["content"] == "# Instructions\nBe helpful."
+
+    def test_read_agents_md(self, tmp_path):
+        agents_md = tmp_path / "AGENTS.md"
+        agents_md.write_text("# Agent Instructions")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 1
+        assert result[0]["filename"] == "AGENTS.md"
+
+    def test_read_nested_config_files(self, tmp_path):
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text("project-level")
+        (tmp_path / "CLAUDE.md").write_text("root-level")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 2
+        filenames = [r["filename"] for r in result]
+        assert filenames.count("CLAUDE.md") == 2
+
+    def test_read_respects_max_depth(self, tmp_path):
+        deep = tmp_path / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        (deep / "CLAUDE.md").write_text("too deep")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[], max_depth=3)
+        assert len(result) == 0
+
+    def test_read_skips_hidden_dirs(self, tmp_path):
+        hidden = tmp_path / ".git"
+        hidden.mkdir()
+        (hidden / "CLAUDE.md").write_text("should skip")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 0
+
+    def test_read_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules"
+        nm.mkdir()
+        (nm / "CLAUDE.md").write_text("should skip")
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 0
+
+    def test_read_home_claude_md(self, tmp_path):
+        """Test scanning ~/.claude/CLAUDE.md equivalent."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("global config")
+        result = read_config_files(
+            scan_roots=[tmp_path],
+            extra_paths=[claude_dir / "CLAUDE.md"],
+        )
+        assert any(r["path"] == str(claude_dir / "CLAUDE.md") for r in result)
+
+
+class TestWriteConfigFile:
+    def test_write_config_file(self, tmp_path):
+        target = tmp_path / "CLAUDE.md"
+
+        class FakeConfigFile:
+            path = str(target)
+            content = "# New content"
+
+        result = write_config_file(FakeConfigFile())
+        assert result == target
+        assert target.read_text() == "# New content"
+
+    def test_write_creates_parent_dirs(self, tmp_path):
+        target = tmp_path / "nested" / "dir" / "CLAUDE.md"
+
+        class FakeConfigFile:
+            path = str(target)
+            content = "nested"
+
+        write_config_file(FakeConfigFile())
+        assert target.exists()
+        assert target.read_text() == "nested"
