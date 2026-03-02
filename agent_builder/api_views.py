@@ -493,12 +493,22 @@ def apply_all(request):
 @api_view(["GET"])
 @perm_classes([IsAuthenticated])
 def apply_all_preview(request):
-    """Preview what files would be written by apply-all, without writing them."""
+    """Preview what files would be written by apply-all, with change detection."""
+    from pathlib import Path as _Path
+
     from .filesystem import (
         DEFAULT_CLAUDE_AGENTS_DIR,
         DEFAULT_CODEROO_AGENTS_DIR,
         DEFAULT_INSTRUCTIONS_DIR,
+        render_agent,
     )
+
+    def _read_disk(path: _Path) -> str | None:
+        """Read file from disk, return None if it doesn't exist."""
+        try:
+            return path.read_text()
+        except (FileNotFoundError, PermissionError):
+            return None
 
     agents = Agent.objects.filter(user=request.user, is_active=True)
     agent_list = []
@@ -508,25 +518,54 @@ def apply_all_preview(request):
         elif agent.source == "coderoo":
             path = DEFAULT_CODEROO_AGENTS_DIR / agent.name / f"{agent.name}.md"
         else:
-            from pathlib import Path
-
-            path = Path(f"unknown/{agent.name}.md")
+            path = _Path(f"unknown/{agent.name}.md")
+        db_content = render_agent(agent)
+        disk_content = _read_disk(path)
+        has_changes = disk_content is None or disk_content != db_content
         agent_list.append(
             {
                 "name": agent.name,
                 "source": agent.source,
                 "path": str(path),
+                "has_changes": has_changes,
+                "disk_content": disk_content,
+                "db_content": db_content,
             }
         )
 
     instructions = Instruction.objects.filter(user=request.user)
-    instruction_list = [
-        {"name": inst.name, "path": str(DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md")}
-        for inst in instructions
-    ]
+    instruction_list = []
+    for inst in instructions:
+        path = DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md"
+        db_content = inst.content
+        disk_content = _read_disk(path)
+        has_changes = disk_content is None or disk_content != db_content
+        instruction_list.append(
+            {
+                "name": inst.name,
+                "path": str(path),
+                "has_changes": has_changes,
+                "disk_content": disk_content,
+                "db_content": db_content,
+            }
+        )
 
     config_files = ConfigFile.objects.filter(user=request.user)
-    config_file_list = [{"filename": cf.filename, "path": cf.path} for cf in config_files]
+    config_file_list = []
+    for cf in config_files:
+        path = _Path(cf.path)
+        db_content = cf.content
+        disk_content = _read_disk(path)
+        has_changes = disk_content is None or disk_content != db_content
+        config_file_list.append(
+            {
+                "filename": cf.filename,
+                "path": cf.path,
+                "has_changes": has_changes,
+                "disk_content": disk_content,
+                "db_content": db_content,
+            }
+        )
 
     return Response(
         {
