@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Agent, AgentChunk, Chunk
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
 
 
 class AgentChunkInline(admin.TabularInline):
@@ -10,13 +10,19 @@ class AgentChunkInline(admin.TabularInline):
     ordering = ["position"]
 
 
+class AgentInstructionInline(admin.TabularInline):
+    model = AgentInstruction
+    extra = 0
+    fields = ["instruction", "injection_mode"]
+
+
 @admin.register(Agent)
 class AgentAdmin(admin.ModelAdmin):
     list_display = ["name", "display_name", "source", "model", "is_active", "updated_at"]
     list_filter = ["source", "model", "is_active"]
     search_fields = ["name", "display_name", "description"]
     readonly_fields = ["created_at", "updated_at"]
-    inlines = [AgentChunkInline]
+    inlines = [AgentChunkInline, AgentInstructionInline]
     fieldsets = (
         ("Agent", {"fields": ("name", "display_name", "source", "model", "is_active", "user")}),
         ("Content", {"fields": ("description", "frontmatter")}),
@@ -29,4 +35,12 @@ class ChunkAdmin(admin.ModelAdmin):
     list_display = ["__str__", "in_library", "user", "updated_at"]
     list_filter = ["in_library"]
     search_fields = ["title", "content"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(Instruction)
+class InstructionAdmin(admin.ModelAdmin):
+    list_display = ["name", "display_name", "injection_mode", "user", "updated_at"]
+    list_filter = ["injection_mode"]
+    search_fields = ["name", "display_name", "content"]
     readonly_fields = ["created_at", "updated_at"]
