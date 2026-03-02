@@ -1,0 +1,5 @@
+include LICENSE
+include README.md
+recursive-include agent_builder/static *
+recursive-include agent_builder/templates *
+recursive-include docs *

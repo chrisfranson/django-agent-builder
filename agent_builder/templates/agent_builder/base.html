@@ -1,0 +1,29 @@
+{% load static compress %}
+<!doctype html>
+<html>
+    <head>
+        <title>{% block page_title %}agent_builder{% endblock %}</title>
+        {% compress css %}
+            <link rel="stylesheet" type="text/css" href="{% static 'agent_builder/css/bootstrap.css' %}" />
+            <link rel="stylesheet" type="text/css" href="{% static 'agent_builder/css/agent_builder.css' %}" />
+            {% block media %}{% endblock %}
+            {% block extra_css %}{% endblock %}
+            <style>
+                {% block inline_css %}{% endblock %}
+            </style>
+        {% endcompress %}
+    </head>
+    <body>
+        {% block content %}{% endblock %}
+        {% compress js %}
+            <script src="{% static 'agent_builder/js/bootstrap.bundle.js' %}"></script>
+            <script src="{% static 'agent_builder/js/agent_builder.js' %}"></script>
+            {% block extra_js %}{% endblock %}
+            <script>
+                {% autoescape off %}
+                {% block inline_js %}{% endblock %}
+                {% endautoescape %}
+            </script>
+        {% endcompress %}
+    </body>
+</html>

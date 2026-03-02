@@ -1,0 +1,19 @@
+{% extends "agent_builder/base.html" %}
+{% load static django_bootstrap5 %}
+
+{% block page_title %}agent_builder | Home{% endblock %}
+
+{% block extra_css %}{% endblock %}
+{% block extra_js %}{% endblock %}
+
+{% block content %}
+    <div class="container">
+    	{% autoescape off %}{% bootstrap_messages %}{% endautoescape %}
+
+        <div class="row">
+            <div class="col">
+            	{{ content }}
+            </div>
+        </div>
+    </div>
+{% endblock %}
