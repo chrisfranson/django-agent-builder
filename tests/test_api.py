@@ -9,6 +9,7 @@ from agent_builder.models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -902,3 +903,114 @@ class TestProfileDiff:
         )
         response = client.get(f"/agent-builder/api/profiles/{profile.pk}/diff/")
         assert response.status_code == 400
+
+
+class TestConfigFileViewSet:
+    @pytest.mark.django_db
+    def test_list_config_files(self, api_client):
+        client, user = api_client
+        ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/test/CLAUDE.md",
+            content="hi",
+            user=user,
+        )
+        response = client.get("/agent-builder/api/config-files/")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    @pytest.mark.django_db
+    def test_create_config_file(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/config-files/",
+            {"filename": "CLAUDE.md", "path": "/new/CLAUDE.md", "content": "content"},
+            format="json",
+        )
+        assert response.status_code == 201
+        assert ConfigFile.objects.filter(user=user).count() == 1
+
+    @pytest.mark.django_db
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other", password="pass")
+        ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/other/CLAUDE.md",
+            content="",
+            user=other_user,
+        )
+        response = client.get("/agent-builder/api/config-files/")
+        assert response.json() == []
+
+    @pytest.mark.django_db
+    def test_delete_config_file(self, api_client):
+        client, user = api_client
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/del/CLAUDE.md",
+            content="",
+            user=user,
+        )
+        response = client.delete(f"/agent-builder/api/config-files/{cf.pk}/")
+        assert response.status_code == 204
+
+
+class TestApplyAllPreview:
+    @pytest.mark.django_db
+    def test_preview_returns_file_lists(self, api_client):
+        client, user = api_client
+        Agent.objects.create(
+            name="test-agent",
+            display_name="Test",
+            source="claude",
+            user=user,
+            is_active=True,
+        )
+        Instruction.objects.create(
+            name="test-instr",
+            display_name="Test",
+            content="content",
+            user=user,
+        )
+        ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/test/CLAUDE.md",
+            content="content",
+            user=user,
+        )
+        response = client.get("/agent-builder/api/apply-all/preview/")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["agents"]) == 1
+        assert data["agents"][0]["name"] == "test-agent"
+        assert len(data["instructions"]) == 1
+        assert len(data["config_files"]) == 1
+
+    @pytest.mark.django_db
+    def test_preview_empty_state(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/apply-all/preview/")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["agents"] == []
+        assert data["instructions"] == []
+        assert data["config_files"] == []
+
+
+class TestImportAllWithConfigFiles:
+    @pytest.mark.django_db
+    def test_import_includes_config_files_count(self, api_client, monkeypatch):
+        client, user = api_client
+        monkeypatch.setattr(
+            "agent_builder.api_views.read_config_files",
+            lambda: [{"filename": "CLAUDE.md", "path": "/tmp/CLAUDE.md", "content": "# Test"}],
+        )
+        monkeypatch.setattr("agent_builder.api_views.read_claude_agents", lambda: [])
+        monkeypatch.setattr("agent_builder.api_views.read_coderoo_agents", lambda: [])
+        monkeypatch.setattr("agent_builder.api_views.read_instructions", lambda: [])
+        response = client.post("/agent-builder/api/import-all/")
+        assert response.status_code == 200
+        data = response.json()
+        assert "config_files_imported" in data
+        assert data["config_files_imported"] == 1

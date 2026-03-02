@@ -20,8 +20,10 @@ from rest_framework.response import Response
 from .filesystem import (
     read_claude_agents,
     read_coderoo_agents,
+    read_config_files,
     read_instructions,
     write_agent,
+    write_config_file,
     write_instruction,
 )
 from .models import (
@@ -30,6 +32,7 @@ from .models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -43,6 +46,7 @@ from .serializers import (
     AgentSerializer,
     ChunkSerializer,
     ChunkVariantSerializer,
+    ConfigFileSerializer,
     InstructionSerializer,
     ProfileSerializer,
     RevisionSerializer,
@@ -311,6 +315,19 @@ class ProfileViewSet(viewsets.ModelViewSet):
         return Response({"diff": diff_result})
 
 
+class ConfigFileViewSet(viewsets.ModelViewSet):
+    """CRUD for config files (CLAUDE.md, AGENTS.md)."""
+
+    serializer_class = ConfigFileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ConfigFile.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
 @api_view(["POST"])
 @perm_classes([IsAuthenticated])
 def split_chunk(request, pk):
@@ -403,6 +420,21 @@ def import_all(request):
         )
         instructions_imported += 1
 
+    # Import config files (CLAUDE.md, AGENTS.md)
+    config_files_imported = 0
+    config_files_skipped = 0
+    for cf_data in read_config_files():
+        if ConfigFile.objects.filter(user=request.user, path=cf_data["path"]).exists():
+            config_files_skipped += 1
+            continue
+        ConfigFile.objects.create(
+            filename=cf_data["filename"],
+            path=cf_data["path"],
+            content=cf_data["content"],
+            user=request.user,
+        )
+        config_files_imported += 1
+
     return Response(
         {
             "status": "ok",
@@ -410,6 +442,8 @@ def import_all(request):
             "skipped": skipped,
             "instructions_imported": instructions_imported,
             "instructions_skipped": instructions_skipped,
+            "config_files_imported": config_files_imported,
+            "config_files_skipped": config_files_skipped,
         }
     )
 
@@ -439,7 +473,68 @@ def apply_all(request):
                 {"name": instruction.name, "status": "error", "detail": str(e)}
             )
 
-    return Response({"results": results, "instruction_results": instruction_results})
+    config_file_results = []
+    for cf in ConfigFile.objects.filter(user=request.user):
+        try:
+            path = write_config_file(cf)
+            config_file_results.append({"name": cf.filename, "path": str(path), "status": "ok"})
+        except Exception as e:
+            config_file_results.append({"name": cf.filename, "status": "error", "detail": str(e)})
+
+    return Response(
+        {
+            "results": results,
+            "instruction_results": instruction_results,
+            "config_file_results": config_file_results,
+        }
+    )
+
+
+@api_view(["GET"])
+@perm_classes([IsAuthenticated])
+def apply_all_preview(request):
+    """Preview what files would be written by apply-all, without writing them."""
+    from .filesystem import (
+        DEFAULT_CLAUDE_AGENTS_DIR,
+        DEFAULT_CODEROO_AGENTS_DIR,
+        DEFAULT_INSTRUCTIONS_DIR,
+    )
+
+    agents = Agent.objects.filter(user=request.user, is_active=True)
+    agent_list = []
+    for agent in agents:
+        if agent.source == "claude":
+            path = DEFAULT_CLAUDE_AGENTS_DIR / f"{agent.name}.md"
+        elif agent.source == "coderoo":
+            path = DEFAULT_CODEROO_AGENTS_DIR / agent.name / f"{agent.name}.md"
+        else:
+            from pathlib import Path
+
+            path = Path(f"unknown/{agent.name}.md")
+        agent_list.append(
+            {
+                "name": agent.name,
+                "source": agent.source,
+                "path": str(path),
+            }
+        )
+
+    instructions = Instruction.objects.filter(user=request.user)
+    instruction_list = [
+        {"name": inst.name, "path": str(DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md")}
+        for inst in instructions
+    ]
+
+    config_files = ConfigFile.objects.filter(user=request.user)
+    config_file_list = [{"filename": cf.filename, "path": cf.path} for cf in config_files]
+
+    return Response(
+        {
+            "agents": agent_list,
+            "instructions": instruction_list,
+            "config_files": config_file_list,
+        }
+    )
 
 
 def _parse_frontmatter_dict(fm_text: str) -> dict:

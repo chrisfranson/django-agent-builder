@@ -10,10 +10,12 @@ from .api_views import (
     AgentViewSet,
     ChunkVariantViewSet,
     ChunkViewSet,
+    ConfigFileViewSet,
     InstructionViewSet,
     ProfileViewSet,
     RevisionViewSet,
     apply_all,
+    apply_all_preview,
     import_all,
     split_chunk,
 )
@@ -27,6 +29,7 @@ router.register(r"chunks", ChunkViewSet, basename="chunk")
 router.register(r"instructions", InstructionViewSet, basename="instruction")
 router.register(r"profiles", ProfileViewSet, basename="profile")
 router.register(r"revisions", RevisionViewSet, basename="revision")
+router.register(r"config-files", ConfigFileViewSet, basename="configfile")
 
 urlpatterns = [
     path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),
@@ -43,6 +46,7 @@ urlpatterns = [
         name="chunk-variants-detail",
     ),
     path("api/import-all/", import_all, name="import-all"),
+    path("api/apply-all/preview/", apply_all_preview, name="apply-all-preview"),
     path("api/apply-all/", apply_all, name="apply-all"),
     path("api/", include(router.urls)),
     path(
