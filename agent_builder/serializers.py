@@ -8,6 +8,7 @@ from .models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -140,3 +141,12 @@ class RevisionSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class ConfigFileSerializer(serializers.ModelSerializer):
+    scope = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = ConfigFile
+        fields = ["id", "filename", "path", "content", "user", "scope", "created_at", "updated_at"]
+        read_only_fields = ["user", "scope", "created_at", "updated_at"]

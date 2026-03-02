@@ -12,6 +12,7 @@ from agent_builder.models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -23,6 +24,7 @@ from agent_builder.serializers import (
     AgentSerializer,
     ChunkSerializer,
     ChunkVariantSerializer,
+    ConfigFileSerializer,
     InstructionSerializer,
     ProfileSerializer,
     RevisionSerializer,
@@ -229,3 +231,33 @@ class TestProfileSerializer:
         assert serializer.is_valid(), serializer.errors
         profile = serializer.save(user=user)
         assert profile.name == "new-config"
+
+
+class TestConfigFileSerializer:
+    @pytest.mark.django_db
+    def test_serialize_config_file(self, user):
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/test/CLAUDE.md",
+            content="# Instructions",
+            user=user,
+        )
+        serializer = ConfigFileSerializer(cf)
+        data = serializer.data
+        assert data["filename"] == "CLAUDE.md"
+        assert data["path"] == "/test/CLAUDE.md"
+        assert data["scope"] == "/test"
+        assert "created_at" in data
+        assert "updated_at" in data
+
+    @pytest.mark.django_db
+    def test_deserialize_config_file(self, user):
+        data = {
+            "filename": "AGENTS.md",
+            "path": "/test/AGENTS.md",
+            "content": "# Agent instructions",
+        }
+        serializer = ConfigFileSerializer(data=data)
+        assert serializer.is_valid(), serializer.errors
+        cf = serializer.save(user=user)
+        assert cf.filename == "AGENTS.md"

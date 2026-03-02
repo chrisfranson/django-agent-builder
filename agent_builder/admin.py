@@ -6,6 +6,7 @@ from .models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -76,3 +77,10 @@ class RevisionAdmin(admin.ModelAdmin):
     list_filter = ["content_type"]
     search_fields = ["message"]
     readonly_fields = ["content_type", "object_id", "content_snapshot", "user", "created_at"]
+
+
+@admin.register(ConfigFile)
+class ConfigFileAdmin(admin.ModelAdmin):
+    list_display = ["filename", "path", "user", "updated_at"]
+    search_fields = ["filename", "path"]
+    readonly_fields = ["created_at", "updated_at"]
