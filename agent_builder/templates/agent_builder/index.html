@@ -154,7 +154,7 @@
         /* CodeMirror styling */
         .CodeMirror {
             height: auto;
-            min-height: 150px;
+            min-height: 100px;
             border-radius: 8px;
             border: 1px solid var(--bs-border-color);
             font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
@@ -192,9 +192,7 @@
             padding: 1rem;
             border: 1px solid var(--bs-border-color);
             border-radius: 8px;
-            min-height: 150px;
-            max-height: 500px;
-            overflow-y: auto;
+            min-height: 100px;
         }
 
         [data-bs-theme="dark"] .markdown-preview {
@@ -793,7 +791,6 @@
                 lineWrapping: true,
                 viewportMargin: Infinity
             });
-            frontmatterCM.setSize(null, 120);
             frontmatterCM.on('change', markUnsaved);
 
             configCM = CodeMirror.fromTextArea(document.getElementById('configEditor'), {
@@ -803,7 +800,6 @@
                 lineWrapping: true,
                 viewportMargin: Infinity
             });
-            configCM.setSize(null, 150);
             configCM.on('change', markUnsaved);
 
             contentCM = CodeMirror.fromTextArea(document.getElementById('contentEditor'), {
@@ -813,7 +809,6 @@
                 lineWrapping: true,
                 viewportMargin: Infinity
             });
-            contentCM.setSize(null, 400);
             contentCM.on('change', () => {
                 markUnsaved();
                 updateStats();
