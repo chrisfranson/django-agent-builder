@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction, Revision
+from .models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+    Profile,
+    Revision,
+)
 
 
 class AgentChunkInline(admin.TabularInline):
@@ -52,6 +61,13 @@ class InstructionAdmin(admin.ModelAdmin):
     list_filter = ["injection_mode"]
     search_fields = ["name", "display_name", "content"]
     readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    list_display = ["name", "description", "user", "created_at"]
+    search_fields = ["name", "description"]
+    readonly_fields = ["snapshot", "created_at"]
 
 
 @admin.register(Revision)
