@@ -83,8 +83,11 @@ def write_agent(
         md_path = agent_dir / f"{agent.name}.md"
         json5_path = agent_dir / f"{agent.name}.json5"
         md_path.write_text(content)
-        config = generate_coderoo_config(agent)
-        json5_path.write_text(json.dumps(config, indent=2))
+        if agent.config:
+            json5_path.write_text(agent.config)
+        else:
+            config = generate_coderoo_config(agent)
+            json5_path.write_text(json.dumps(config, indent=2))
         return md_path
 
     raise ValueError(f"Unknown agent source: {agent.source}")

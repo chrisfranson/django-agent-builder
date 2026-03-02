@@ -30,6 +30,9 @@ class Agent(models.Model):
         max_length=20, choices=MODEL_CHOICES, default="sonnet", help_text="AI model"
     )
     frontmatter = models.TextField(blank=True, help_text="Raw YAML frontmatter")
+    config = models.TextField(
+        blank=True, default="", help_text="Agent config (JSON5 for Coderoo agents)"
+    )
     is_active = models.BooleanField(default=True, help_text="Whether this agent is active")
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

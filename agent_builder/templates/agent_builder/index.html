@@ -1198,6 +1198,11 @@
                 frontmatter: frontmatter,
             };
 
+            // Include config for Coderoo agents
+            if (currentSource === 'coderoo') {
+                data.config = configCM.getValue();
+            }
+
             try {
                 const res = await apiFetch(`/agent-builder/api/agents/${currentAgentId}/`, {
                     method: 'PATCH',

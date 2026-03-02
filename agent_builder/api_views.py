@@ -612,6 +612,7 @@ def _import_agent(user, agent_data: dict) -> Agent:
         description=fm_dict.get("description", ""),
         model=fm_dict.get("model", "sonnet"),
         frontmatter=agent_data["frontmatter"],
+        config=agent_data.get("config", ""),
         user=user,
     )
     if agent_data.get("content"):

@@ -94,7 +94,6 @@ class AgentInstructionSerializer(serializers.ModelSerializer):
 class AgentSerializer(serializers.ModelSerializer):
     agent_chunks = AgentChunkSerializer(many=True, read_only=True)
     agent_instructions = AgentInstructionSerializer(many=True, read_only=True)
-    config = serializers.SerializerMethodField()
 
     class Meta:
         model = Agent
@@ -106,24 +105,15 @@ class AgentSerializer(serializers.ModelSerializer):
             "description",
             "model",
             "frontmatter",
+            "config",
             "is_active",
             "user",
             "agent_chunks",
             "agent_instructions",
-            "config",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["user", "created_at", "updated_at"]
-
-    def get_config(self, obj):
-        if obj.source != "coderoo":
-            return None
-        import json
-
-        from .filesystem import generate_coderoo_config
-
-        return json.dumps(generate_coderoo_config(obj), indent=2)
 
 
 class AgentListSerializer(serializers.ModelSerializer):
