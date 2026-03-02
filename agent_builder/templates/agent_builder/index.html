@@ -1011,13 +1011,20 @@
 
             try {
                 const res = await apiFetch(`/agent-builder/api/agents/${currentAgentId}/`, {
-                    method: 'PUT',
+                    method: 'PATCH',
                     body: JSON.stringify(data)
                 });
 
                 if (!res.ok) {
                     const err = await res.json();
-                    throw new Error(err.detail || 'Save failed');
+                    // DRF returns field-level errors as {field: [messages]}
+                    if (err.detail) {
+                        throw new Error(err.detail);
+                    }
+                    const fieldErrors = Object.entries(err)
+                        .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+                        .join('; ');
+                    throw new Error(fieldErrors || 'Save failed');
                 }
 
                 currentAgent = newName;
