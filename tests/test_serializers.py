@@ -13,6 +13,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Profile,
     Revision,
 )
 from agent_builder.serializers import (
@@ -23,6 +24,7 @@ from agent_builder.serializers import (
     ChunkSerializer,
     ChunkVariantSerializer,
     InstructionSerializer,
+    ProfileSerializer,
     RevisionSerializer,
 )
 
@@ -199,3 +201,31 @@ class TestRevisionSerializer:
         serializer = RevisionSerializer(data=data)
         # Serializer should be read-only — all fields are read_only
         assert serializer.is_valid()  # Valid because no writable fields
+
+
+@pytest.mark.django_db
+class TestProfileSerializer:
+    def test_serialize_profile(self, user):
+        profile = Profile.objects.create(
+            name="test-config",
+            description="Test configuration",
+            snapshot={"agents": [], "chunks": [], "instructions": []},
+            user=user,
+        )
+        serializer = ProfileSerializer(profile)
+        data = serializer.data
+        assert data["name"] == "test-config"
+        assert data["description"] == "Test configuration"
+        assert data["snapshot"]["agents"] == []
+        assert "created_at" in data
+
+    def test_deserialize_profile(self, user):
+        data = {
+            "name": "new-config",
+            "description": "A new config",
+            "snapshot": {"agents": [], "chunks": [], "instructions": []},
+        }
+        serializer = ProfileSerializer(data=data)
+        assert serializer.is_valid(), serializer.errors
+        profile = serializer.save(user=user)
+        assert profile.name == "new-config"

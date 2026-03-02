@@ -2,7 +2,16 @@
 
 from rest_framework import serializers
 
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction, Revision
+from .models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+    Profile,
+    Revision,
+)
 
 
 class ChunkVariantSerializer(serializers.ModelSerializer):
@@ -109,6 +118,13 @@ class AgentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Agent
         fields = ["id", "name", "display_name", "source", "description", "model", "is_active"]
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
+        fields = ["id", "name", "description", "snapshot", "user", "created_at"]
+        read_only_fields = ["user", "created_at"]
 
 
 class RevisionSerializer(serializers.ModelSerializer):
