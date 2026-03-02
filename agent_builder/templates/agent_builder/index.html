@@ -342,6 +342,70 @@
             background: var(--accent-primary) !important;
             color: white !important;
         }
+
+        /* Full document modal */
+        .modal-document .modal-dialog {
+            max-width: 95vw;
+            width: 95vw;
+            margin: 2.5vh auto;
+        }
+        .modal-document .modal-content {
+            height: 95vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-document .modal-header {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid var(--bs-border-color);
+        }
+        .modal-document .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+        /* Seamless editor sections inside document modal */
+        .doc-modal-section {
+            border-bottom: 1px solid var(--bs-border-color);
+        }
+        .doc-modal-section:last-child {
+            border-bottom: none;
+        }
+        .doc-modal-section .CodeMirror {
+            border: none !important;
+            border-radius: 0 !important;
+            min-height: unset;
+            box-shadow: none !important;
+        }
+        .doc-modal-section .CodeMirror-focused {
+            border: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Instructions modal editor */
+        .modal-nearfull .modal-dialog {
+            max-width: 95vw;
+            width: 95vw;
+            margin: 2.5vh auto;
+        }
+        .modal-nearfull .modal-content {
+            height: 95vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-nearfull .modal-body {
+            flex: 1;
+            overflow: hidden;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-nearfull .modal-body .CodeMirror {
+            flex: 1;
+            height: 100% !important;
+            min-height: unset;
+            border: none;
+            border-radius: 0;
+        }
     </style>
 </head>
 <body>
@@ -468,6 +532,10 @@
                             <small class="text-muted" id="editorSubtitle"></small>
                         </div>
                         <div class="d-flex gap-2 align-items-center">
+                            <button class="btn btn-outline-secondary btn-sm d-none" id="docModeBtn"
+                                    onclick="openDocumentModal()" title="Document mode (all fields)">
+                                <i class="bi bi-file-earmark-text"></i>
+                            </button>
                             <div class="btn-group d-none" id="viewModeGroup">
                                 <button class="btn btn-outline-secondary btn-sm view-mode-btn active"
                                         onclick="setViewMode('edit')" title="Edit mode">
@@ -549,9 +617,14 @@
                                         <i class="bi bi-file-text text-info"></i> Instructions
                                         <small class="text-muted fw-normal ms-1">(Markdown)</small>
                                     </label>
-                                    <button class="btn btn-link btn-sm p-0" onclick="toggleSection('content')">
-                                        <i class="bi bi-chevron-down" id="contentToggle"></i>
-                                    </button>
+                                    <div class="d-flex gap-1 align-items-center">
+                                        <button class="btn btn-link btn-sm p-0" onclick="toggleSection('content')" title="Collapse/expand">
+                                            <i class="bi bi-chevron-down" id="contentToggle"></i>
+                                        </button>
+                                        <button class="btn btn-link btn-sm p-0 ms-1" onclick="openInstructionsModal()" title="Open in fullscreen editor">
+                                            <i class="bi bi-arrows-fullscreen"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 <div id="contentContainer" class="split-container">
                                     <div id="contentEditorWrapper">
@@ -719,9 +792,52 @@
                             <tr><td><span class="kbd">Ctrl+D</span></td><td>Toggle dark mode</td></tr>
                             <tr><td><span class="kbd">Escape</span></td><td>Deselect agent / Clear search</td></tr>
                             <tr><td><span class="kbd">Ctrl+1/2/3</span></td><td>Edit / Split / Preview mode</td></tr>
+                            <tr><td><span class="kbd">Ctrl+Shift+F</span></td><td>Fullscreen instructions editor</td></tr>
+                            <tr><td><span class="kbd">Ctrl+Shift+D</span></td><td>Document mode</td></tr>
                             <tr><td><span class="kbd">?</span></td><td>Show this help</td></tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instructions Fullscreen Modal -->
+    <div class="modal fade modal-nearfull" id="instructionsModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title mb-0">
+                        <i class="bi bi-file-text text-info"></i> Instructions
+                        <small class="text-muted fw-normal ms-1">(Markdown)</small>
+                    </h6>
+                    <div class="d-flex gap-2 align-items-center">
+                        <span class="text-muted small" id="modalLineCount"></span>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                </div>
+                <div class="modal-body" id="instructionsModalBody">
+                    <!-- contentEditorWrapper will be moved here on open -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Document Modal -->
+    <div class="modal fade modal-document" id="documentModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title mb-0" id="docModalTitle">
+                        <i class="bi bi-file-earmark-text"></i> Document Mode
+                    </h6>
+                    <div class="d-flex gap-2 align-items-center">
+                        <small class="text-muted" id="docModalStats"></small>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                </div>
+                <div class="modal-body" id="documentModalBody">
+                    <!-- Editor sections will be moved here dynamically -->
                 </div>
             </div>
         </div>
@@ -740,6 +856,7 @@
         }
         function apiFetch(url, options = {}) {
             const defaults = {
+                credentials: 'same-origin',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': getCsrfToken(),
@@ -837,6 +954,9 @@
                 }
                 // Escape: Deselect / Clear search
                 if (e.key === 'Escape') {
+                    // Don't deselect when a modal is open (Bootstrap handles modal close)
+                    const openModal = document.querySelector('.modal.show');
+                    if (openModal) return;
                     const search = document.getElementById('searchInput');
                     if (document.activeElement === search) {
                         search.value = '';
@@ -858,6 +978,16 @@
                 if (e.ctrlKey && e.key === '3') {
                     e.preventDefault();
                     setViewMode('preview');
+                }
+                // Ctrl+Shift+F: Fullscreen instructions editor
+                if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+                    e.preventDefault();
+                    if (currentAgent || currentConfigFileId) openInstructionsModal();
+                }
+                // Ctrl+Shift+D: Document mode
+                if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                    e.preventDefault();
+                    if (currentAgent || currentConfigFileId) openDocumentModal();
                 }
                 // ?: Show shortcuts
                 if (e.key === '?' && !e.target.matches('input, textarea') && !e.target.closest('.CodeMirror')) {
@@ -1040,6 +1170,7 @@
                 document.getElementById('applyOneBtn').classList.add('d-none');
                 document.getElementById('deleteBtn').classList.add('d-none');
                 document.getElementById('viewModeGroup').classList.remove('d-none');
+                document.getElementById('docModeBtn').classList.add('d-none');
 
                 contentCM.setValue(cf.content || '');
 
@@ -1111,6 +1242,7 @@
                 document.getElementById('applyOneBtn').classList.remove('d-none');
                 document.getElementById('deleteBtn').classList.remove('d-none');
                 document.getElementById('viewModeGroup').classList.remove('d-none');
+                document.getElementById('docModeBtn').classList.remove('d-none');
 
                 clearUnsaved();
                 updateStats();
@@ -1150,6 +1282,7 @@
             document.getElementById('applyOneBtn').classList.add('d-none');
             document.getElementById('deleteBtn').classList.add('d-none');
             document.getElementById('viewModeGroup').classList.add('d-none');
+            document.getElementById('docModeBtn').classList.add('d-none');
             document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
             document.getElementById('editorSubtitle').textContent = '';
 
@@ -1425,6 +1558,208 @@
                 if (section === 'config') configCM.refresh();
                 if (section === 'content') contentCM.refresh();
             }
+        }
+
+        function openDocumentModal() {
+            const modalBody = document.getElementById('documentModalBody');
+            const modalEl = document.getElementById('documentModal');
+
+            // Clear modal body
+            modalBody.innerHTML = '';
+
+            // Determine which sections to include
+            const sections = [];
+
+            // 1. Frontmatter (always shown for agents)
+            const fmContainer = document.getElementById('frontmatterContainer');
+            if (fmContainer && fmContainer.parentElement && !fmContainer.parentElement.classList.contains('d-none')) {
+                sections.push({
+                    name: 'frontmatter',
+                    container: fmContainer,
+                    cm: frontmatterCM,
+                    parent: fmContainer.parentNode,
+                    nextSibling: fmContainer.nextSibling
+                });
+            }
+
+            // 2. Config (Coderoo agents only)
+            const configSection = document.getElementById('configSection');
+            const configContainer = document.getElementById('configContainer');
+            if (configSection && !configSection.classList.contains('d-none')) {
+                sections.push({
+                    name: 'config',
+                    container: configContainer,
+                    cm: configCM,
+                    parent: configContainer.parentNode,
+                    nextSibling: configContainer.nextSibling
+                });
+            }
+
+            // 3. Instructions/Content (always)
+            const contentWrapper = document.getElementById('contentEditorWrapper');
+            sections.push({
+                name: 'content',
+                container: contentWrapper,
+                cm: contentCM,
+                parent: contentWrapper.parentNode,
+                nextSibling: contentWrapper.nextSibling
+            });
+
+            // Move each section into the modal with doc-modal-section wrapper
+            sections.forEach((sec) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'doc-modal-section';
+                wrapper.dataset.sectionName = sec.name;
+                wrapper.appendChild(sec.container);
+                modalBody.appendChild(wrapper);
+            });
+
+            // Store sections info for restoration
+            modalEl._docSections = sections;
+
+            // Set auto-expand heights
+            sections.forEach(sec => {
+                sec.cm.setSize(null, null);
+                sec.cm.setOption('viewportMargin', Infinity);
+            });
+
+            // Show modal
+            const modal = new bootstrap.Modal(modalEl);
+            modal.show();
+
+            // Refresh all editors after modal transition
+            modalEl.addEventListener('shown.bs.modal', function onShown() {
+                sections.forEach(sec => {
+                    sec.cm.refresh();
+                });
+                // Focus first editor
+                if (sections.length > 0) sections[0].cm.focus();
+                updateDocModalStats();
+                modalEl.removeEventListener('shown.bs.modal', onShown);
+            });
+
+            // Setup arrow key navigation between fields
+            setupDocModalNavigation(sections);
+
+            // Restore on close
+            modalEl.addEventListener('hidden.bs.modal', function onHidden() {
+                restoreFromDocumentModal();
+                modalEl.removeEventListener('hidden.bs.modal', onHidden);
+            });
+        }
+
+        function updateDocModalStats() {
+            const modalEl = document.getElementById('documentModal');
+            const sections = modalEl._docSections;
+            if (!sections) return;
+            let totalLines = 0;
+            sections.forEach(sec => {
+                totalLines += sec.cm.getValue().split('\n').length;
+            });
+            document.getElementById('docModalStats').textContent = totalLines + ' lines total';
+        }
+
+        function setupDocModalNavigation(sections) {
+            sections.forEach((sec, i) => {
+                sec.cm._docModalKeyHandler = (cm, event) => {
+                    if (event.key === 'ArrowUp') {
+                        const cursor = cm.getCursor();
+                        if (cursor.line === 0 && cursor.ch === 0 && i > 0) {
+                            event.preventDefault();
+                            const prevCM = sections[i - 1].cm;
+                            const lastLine = prevCM.lastLine();
+                            const lastCh = prevCM.getLine(lastLine).length;
+                            prevCM.focus();
+                            prevCM.setCursor({ line: lastLine, ch: lastCh });
+                        }
+                    } else if (event.key === 'ArrowDown') {
+                        const cursor = cm.getCursor();
+                        const lastLine = cm.lastLine();
+                        const lastCh = cm.getLine(lastLine).length;
+                        if (cursor.line === lastLine && cursor.ch === lastCh && i < sections.length - 1) {
+                            event.preventDefault();
+                            const nextCM = sections[i + 1].cm;
+                            nextCM.focus();
+                            nextCM.setCursor({ line: 0, ch: 0 });
+                        }
+                    }
+                };
+                sec.cm.on('keydown', sec.cm._docModalKeyHandler);
+            });
+        }
+
+        function restoreFromDocumentModal() {
+            const modalEl = document.getElementById('documentModal');
+            const sections = modalEl._docSections;
+            if (!sections) return;
+
+            // Remove arrow-key handlers
+            sections.forEach(sec => {
+                if (sec.cm._docModalKeyHandler) {
+                    sec.cm.off('keydown', sec.cm._docModalKeyHandler);
+                    delete sec.cm._docModalKeyHandler;
+                }
+            });
+
+            // Move each container back to its original parent
+            sections.forEach(sec => {
+                if (sec.nextSibling) {
+                    sec.parent.insertBefore(sec.container, sec.nextSibling);
+                } else {
+                    sec.parent.appendChild(sec.container);
+                }
+            });
+
+            // Restore original CodeMirror sizes
+            frontmatterCM.setSize(null, 120);
+            configCM.setSize(null, 150);
+            contentCM.setSize(null, 400);
+
+            // Refresh all
+            setTimeout(() => {
+                frontmatterCM.refresh();
+                configCM.refresh();
+                contentCM.refresh();
+                updateStats();
+            }, 10);
+
+            // Clean up
+            delete modalEl._docSections;
+            document.getElementById('documentModalBody').innerHTML = '';
+        }
+
+        function openInstructionsModal() {
+            const wrapper = document.getElementById('contentEditorWrapper');
+            const modalBody = document.getElementById('instructionsModalBody');
+            const modalEl = document.getElementById('instructionsModal');
+
+            // Move the editor wrapper into the modal
+            modalBody.appendChild(wrapper);
+
+            // Show the modal
+            const modal = new bootstrap.Modal(modalEl);
+            modal.show();
+
+            // Refresh CodeMirror after modal transition completes
+            modalEl.addEventListener('shown.bs.modal', function onShown() {
+                contentCM.refresh();
+                contentCM.focus();
+                // Update modal line count
+                const lc = contentCM.getValue().split('\n').length;
+                document.getElementById('modalLineCount').textContent = lc + ' lines';
+                modalEl.removeEventListener('shown.bs.modal', onShown);
+            });
+
+            // When modal closes, move the editor back
+            modalEl.addEventListener('hidden.bs.modal', function onHidden() {
+                const container = document.getElementById('contentContainer');
+                const preview = document.getElementById('contentPreview');
+                // Insert wrapper before the preview div (or as first child)
+                container.insertBefore(wrapper, preview);
+                contentCM.refresh();
+                updateStats();
+                modalEl.removeEventListener('hidden.bs.modal', onHidden);
+            });
         }
 
         function markUnsaved() {
