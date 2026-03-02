@@ -438,3 +438,47 @@ class TestChunkLibrary:
         assert response.status_code == 200
         chunk.refresh_from_db()
         assert chunk.in_library is True
+
+
+@pytest.mark.django_db
+class TestInstructionImportApply:
+    def test_import_all_includes_instructions(self, api_client, tmp_path, monkeypatch):
+        client, user = api_client
+        instructions_dir = tmp_path / "instructions"
+        instructions_dir.mkdir()
+        (instructions_dir / "coding-standards.md").write_text("Follow PEP 8.")
+
+        monkeypatch.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", instructions_dir)
+        monkeypatch.setattr(
+            "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", tmp_path / "claude"
+        )
+        monkeypatch.setattr(
+            "agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "coderoo"
+        )
+
+        response = client.post("/agent-builder/api/import-all/")
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("instructions_imported", 0) >= 1
+        assert Instruction.objects.filter(user=user, name="coding-standards").exists()
+
+    def test_apply_all_writes_instructions(self, api_client, tmp_path, monkeypatch):
+        client, user = api_client
+        monkeypatch.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path)
+        monkeypatch.setattr(
+            "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", tmp_path / "claude"
+        )
+        monkeypatch.setattr(
+            "agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "coderoo"
+        )
+
+        Instruction.objects.create(
+            name="coding-standards",
+            display_name="Coding Standards",
+            content="Follow PEP 8.",
+            user=user,
+        )
+
+        response = client.post("/agent-builder/api/apply-all/")
+        assert response.status_code == 200
+        assert (tmp_path / "coding-standards.md").exists()

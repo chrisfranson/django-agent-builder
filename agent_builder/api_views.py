@@ -13,7 +13,13 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .filesystem import read_claude_agents, read_coderoo_agents, write_agent
+from .filesystem import (
+    read_claude_agents,
+    read_coderoo_agents,
+    read_instructions,
+    write_agent,
+    write_instruction,
+)
 from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
 from .serializers import (
     AgentChunkSerializer,
@@ -212,13 +218,35 @@ def import_all(request):
         _import_agent(request.user, agent_data)
         imported += 1
 
-    return Response({"status": "ok", "imported": imported, "skipped": skipped})
+    instructions_imported = 0
+    instructions_skipped = 0
+    for instr_data in read_instructions():
+        if Instruction.objects.filter(user=request.user, name=instr_data["name"]).exists():
+            instructions_skipped += 1
+            continue
+        Instruction.objects.create(
+            name=instr_data["name"],
+            display_name=instr_data["name"].replace("-", " ").title(),
+            content=instr_data["content"],
+            user=request.user,
+        )
+        instructions_imported += 1
+
+    return Response(
+        {
+            "status": "ok",
+            "imported": imported,
+            "skipped": skipped,
+            "instructions_imported": instructions_imported,
+            "instructions_skipped": instructions_skipped,
+        }
+    )
 
 
 @api_view(["POST"])
 @perm_classes([IsAuthenticated])
 def apply_all(request):
-    """Write all active agents to disk."""
+    """Write all active agents and instructions to disk."""
     agents = Agent.objects.filter(user=request.user, is_active=True)
     results = []
     for agent in agents:
@@ -227,7 +255,20 @@ def apply_all(request):
             results.append({"name": agent.name, "status": "ok", "path": str(path)})
         except Exception as e:
             results.append({"name": agent.name, "status": "error", "detail": str(e)})
-    return Response({"results": results})
+
+    instruction_results = []
+    for instruction in Instruction.objects.filter(user=request.user):
+        try:
+            path = write_instruction(instruction)
+            instruction_results.append(
+                {"name": instruction.name, "status": "ok", "path": str(path)}
+            )
+        except Exception as e:
+            instruction_results.append(
+                {"name": instruction.name, "status": "error", "detail": str(e)}
+            )
+
+    return Response({"results": results, "instruction_results": instruction_results})
 
 
 def _parse_frontmatter_dict(fm_text: str) -> dict:
