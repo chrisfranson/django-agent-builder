@@ -157,3 +157,97 @@ class TestAgentChunkViewSet:
         )
         assert response.status_code == 403
         assert AgentChunk.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestApplyEndpoint:
+    def test_apply_claude_agent(self, api_client, tmp_path):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test-agent",
+            user=user,
+        )
+        chunk = Chunk.objects.create(content="## Instructions", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR",
+                tmp_path / ".claude" / "agents",
+            )
+            response = client.post(f"/agent-builder/api/agents/{agent.pk}/apply/")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        written = (tmp_path / ".claude" / "agents" / "test-agent.md").read_text()
+        assert "## Instructions" in written
+
+
+@pytest.mark.django_db
+class TestImportAllEndpoint:
+    def test_import_all(self, api_client, tmp_path):
+        client, user = api_client
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "imported-agent.md").write_text(
+            "---\nname: imported-agent\ndescription: Imported\nmodel: sonnet\n---\n\n## Content"
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR",
+                agents_dir,
+            )
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR",
+                tmp_path / "empty",
+            )
+            response = client.post("/agent-builder/api/import-all/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["imported"] >= 1
+        assert Agent.objects.filter(user=user, name="imported-agent").exists()
+        agent = Agent.objects.get(user=user, name="imported-agent")
+        assert agent.chunks.count() == 1
+
+
+@pytest.mark.django_db
+class TestApplyAllEndpoint:
+    def test_apply_all_writes_active_agents(self, api_client, tmp_path):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="active-agent",
+            display_name="Active",
+            source="claude",
+            frontmatter="name: active-agent",
+            is_active=True,
+            user=user,
+        )
+        chunk = Chunk.objects.create(content="## Active Content", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        Agent.objects.create(
+            name="inactive-agent",
+            display_name="Inactive",
+            source="claude",
+            is_active=False,
+            user=user,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR",
+                tmp_path / ".claude" / "agents",
+            )
+            response = client.post("/agent-builder/api/apply-all/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["name"] == "active-agent"
+        written = (tmp_path / ".claude" / "agents" / "active-agent.md").read_text()
+        assert "## Active Content" in written
