@@ -22,6 +22,7 @@ from .filesystem import (
     write_instruction,
 )
 from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
+from .revisions import create_revision
 from .serializers import (
     AgentChunkSerializer,
     AgentInstructionSerializer,
@@ -87,6 +88,10 @@ class ChunkViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         serializer.save(user=self.request.user)
 
+    def perform_update(self, serializer) -> None:
+        instance = serializer.save()
+        create_revision(instance, self.request.user)
+
 
 class ChunkVariantViewSet(viewsets.ModelViewSet):
     """CRUD for chunk variants, nested under a chunk."""
@@ -136,6 +141,10 @@ class InstructionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer) -> None:
+        instance = serializer.save()
+        create_revision(instance, self.request.user)
 
 
 class AgentInstructionViewSet(viewsets.ModelViewSet):
