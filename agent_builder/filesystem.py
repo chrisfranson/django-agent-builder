@@ -214,23 +214,30 @@ def read_config_files(
 
     # Check explicit extra paths first
     for file_path in extras:
-        if file_path.is_file() and str(file_path) not in seen_paths:
-            try:
-                results.append(
-                    {
-                        "filename": file_path.name,
-                        "path": str(file_path),
-                        "content": file_path.read_text(),
-                    }
-                )
-                seen_paths.add(str(file_path))
-            except Exception:
-                continue
+        if file_path.is_file():
+            resolved = str(file_path.resolve())
+            if resolved not in seen_paths:
+                try:
+                    results.append(
+                        {
+                            "filename": file_path.name,
+                            "path": str(file_path),
+                            "content": file_path.read_text(),
+                        }
+                    )
+                    seen_paths.add(resolved)
+                except Exception:
+                    continue
 
-    # Recursively scan roots
+    # Recursively scan roots -- resolve each root to dedup symlinked trees
+    resolved_roots: set[str] = set()
     for root in roots:
         if not root.is_dir():
             continue
+        resolved_root = str(root.resolve())
+        if resolved_root in resolved_roots:
+            continue
+        resolved_roots.add(resolved_root)
         _scan_dir(root, 0, max_depth, seen_paths, results)
 
     return results
@@ -252,17 +259,17 @@ def _scan_dir(
         return
     for entry in entries:
         if entry.is_file() and entry.name in CONFIG_FILENAMES:
-            path_str = str(entry)
-            if path_str not in seen_paths:
+            resolved = str(entry.resolve())
+            if resolved not in seen_paths:
                 try:
                     results.append(
                         {
                             "filename": entry.name,
-                            "path": path_str,
+                            "path": str(entry),
                             "content": entry.read_text(),
                         }
                     )
-                    seen_paths.add(path_str)
+                    seen_paths.add(resolved)
                 except Exception:
                     continue
         elif entry.is_dir() and entry.name not in SKIP_DIRS and not entry.name.startswith("."):

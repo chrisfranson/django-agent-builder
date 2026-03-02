@@ -320,6 +320,57 @@ class TestReadConfigFiles:
         assert any(r["path"] == str(claude_dir / "CLAUDE.md") for r in result)
 
 
+class TestSymlinkDedup:
+    def test_symlinked_scan_roots_dedup(self, tmp_path):
+        """Symlinked scan roots should not produce duplicate results."""
+        real_dir = tmp_path / "real_projects"
+        real_dir.mkdir()
+        (real_dir / "CLAUDE.md").write_text("# Config")
+
+        link_dir = tmp_path / "linked_projects"
+        link_dir.symlink_to(real_dir)
+
+        result = read_config_files(scan_roots=[real_dir, link_dir], extra_paths=[])
+        assert len(result) == 1
+        assert result[0]["content"] == "# Config"
+
+    def test_symlinked_file_in_extras_and_scan(self, tmp_path):
+        """A file found via extra_paths should not duplicate when found via scan."""
+        project = tmp_path / "project"
+        project.mkdir()
+        config = project / "CLAUDE.md"
+        config.write_text("# Config")
+
+        result = read_config_files(
+            scan_roots=[tmp_path],
+            extra_paths=[config],
+        )
+        assert len(result) == 1
+
+    def test_symlinked_nested_dir_dedup(self, tmp_path):
+        """Symlinks within a scan root should not cause duplicates."""
+        real_sub = tmp_path / "real_sub"
+        real_sub.mkdir()
+        (real_sub / "AGENTS.md").write_text("# Agents")
+
+        link_sub = tmp_path / "link_sub"
+        link_sub.symlink_to(real_sub)
+
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        # real_sub/AGENTS.md and link_sub/AGENTS.md resolve to the same file
+        assert len(result) == 1
+
+    def test_non_symlink_paths_still_work(self, tmp_path):
+        """Regular paths without symlinks should work as before."""
+        (tmp_path / "CLAUDE.md").write_text("root")
+        sub = tmp_path / "project"
+        sub.mkdir()
+        (sub / "AGENTS.md").write_text("nested")
+
+        result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
+        assert len(result) == 2
+
+
 class TestWriteConfigFile:
     def test_write_config_file(self, tmp_path):
         target = tmp_path / "CLAUDE.md"
