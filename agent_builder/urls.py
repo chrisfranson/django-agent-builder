@@ -8,6 +8,7 @@ from .api_views import (
     AgentChunkViewSet,
     AgentInstructionViewSet,
     AgentViewSet,
+    ChunkVariantViewSet,
     ChunkViewSet,
     InstructionViewSet,
     apply_all,
@@ -25,6 +26,18 @@ router.register(r"instructions", InstructionViewSet, basename="instruction")
 
 urlpatterns = [
     path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),
+    path(
+        "api/chunks/<int:chunk_pk>/variants/",
+        ChunkVariantViewSet.as_view({"get": "list", "post": "create"}),
+        name="chunk-variants-list",
+    ),
+    path(
+        "api/chunks/<int:chunk_pk>/variants/<int:pk>/",
+        ChunkVariantViewSet.as_view(
+            {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
+        ),
+        name="chunk-variants-detail",
+    ),
     path("api/import-all/", import_all, name="import-all"),
     path("api/apply-all/", apply_all, name="apply-all"),
     path("api/", include(router.urls)),

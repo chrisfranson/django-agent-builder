@@ -2,7 +2,14 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from agent_builder.models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+)
 
 User = get_user_model()
 
@@ -482,3 +489,73 @@ class TestInstructionImportApply:
         response = client.post("/agent-builder/api/apply-all/")
         assert response.status_code == 200
         assert (tmp_path / "coding-standards.md").exists()
+
+
+@pytest.mark.django_db
+class TestChunkVariantViewSet:
+    def test_list_variants(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ChunkVariant.objects.create(chunk=chunk, label="gentle", content="gentle", position=0)
+        ChunkVariant.objects.create(chunk=chunk, label="firm", content="firm", position=1)
+        response = client.get(f"/agent-builder/api/chunks/{chunk.pk}/variants/")
+        assert response.status_code == 200
+        assert len(response.json()) == 2
+        assert response.json()[0]["label"] == "gentle"
+
+    def test_create_variant(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        response = client.post(
+            f"/agent-builder/api/chunks/{chunk.pk}/variants/",
+            {"label": "gentle", "content": "gentle version", "position": 0},
+            format="json",
+        )
+        assert response.status_code == 201
+        assert response.json()["label"] == "gentle"
+        assert ChunkVariant.objects.filter(chunk=chunk).count() == 1
+
+    def test_update_variant(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="old", position=0
+        )
+        response = client.patch(
+            f"/agent-builder/api/chunks/{chunk.pk}/variants/{variant.pk}/",
+            {"content": "updated"},
+            format="json",
+        )
+        assert response.status_code == 200
+        variant.refresh_from_db()
+        assert variant.content == "updated"
+
+    def test_delete_variant(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="content", position=0
+        )
+        response = client.delete(f"/agent-builder/api/chunks/{chunk.pk}/variants/{variant.pk}/")
+        assert response.status_code == 204
+        assert ChunkVariant.objects.count() == 0
+
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_variant", password="pass")
+        other_chunk = Chunk.objects.create(title="Other", content="content", user=other_user)
+        ChunkVariant.objects.create(
+            chunk=other_chunk, label="gentle", content="content", position=0
+        )
+        response = client.get(f"/agent-builder/api/chunks/{other_chunk.pk}/variants/")
+        assert response.status_code == 404
+
+    def test_variant_retrieve(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="content", position=0
+        )
+        response = client.get(f"/agent-builder/api/chunks/{chunk.pk}/variants/{variant.pk}/")
+        assert response.status_code == 200
+        assert response.json()["label"] == "gentle"

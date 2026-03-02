@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from django.db import transaction
 from django.db.models import F
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.decorators import permission_classes as perm_classes
@@ -20,13 +21,14 @@ from .filesystem import (
     write_agent,
     write_instruction,
 )
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
 from .serializers import (
     AgentChunkSerializer,
     AgentInstructionSerializer,
     AgentListSerializer,
     AgentSerializer,
     ChunkSerializer,
+    ChunkVariantSerializer,
     InstructionSerializer,
 )
 
@@ -84,6 +86,24 @@ class ChunkViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         serializer.save(user=self.request.user)
+
+
+class ChunkVariantViewSet(viewsets.ModelViewSet):
+    """CRUD for chunk variants, nested under a chunk."""
+
+    serializer_class = ChunkVariantSerializer
+    permission_classes = [IsAuthenticated]
+
+    def _get_chunk(self):
+        return get_object_or_404(Chunk, pk=self.kwargs["chunk_pk"], user=self.request.user)
+
+    def get_queryset(self) -> QuerySet[ChunkVariant]:
+        chunk = self._get_chunk()
+        return ChunkVariant.objects.filter(chunk=chunk)
+
+    def perform_create(self, serializer) -> None:
+        chunk = self._get_chunk()
+        serializer.save(chunk=chunk)
 
 
 class AgentChunkViewSet(viewsets.ModelViewSet):
