@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rest_framework import viewsets
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 
 from .models import Agent, AgentChunk, Chunk
@@ -64,4 +65,7 @@ class AgentChunkViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer) -> None:
+        chunk = serializer.validated_data["chunk"]
+        if chunk.user != self.request.user:
+            raise PermissionDenied("Cannot link a chunk owned by another user.")
         serializer.save(agent_id=self.kwargs["agent_pk"])

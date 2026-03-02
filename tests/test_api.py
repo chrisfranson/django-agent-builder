@@ -2,7 +2,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from agent_builder.models import Agent, Chunk
+from agent_builder.models import Agent, AgentChunk, Chunk
 
 User = get_user_model()
 
@@ -119,3 +119,41 @@ class TestChunkViewSet:
         client = APIClient()
         response = client.get("/agent-builder/api/agents/")
         assert response.status_code in [401, 403]
+
+
+@pytest.mark.django_db
+class TestAgentChunkViewSet:
+    def test_create_agent_chunk(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        chunk = Chunk.objects.create(title="Chunk", content="Content", user=user)
+        response = client.post(
+            f"/agent-builder/api/agents/{agent.pk}/chunks/",
+            {"chunk_id": chunk.pk, "position": 0},
+            format="json",
+        )
+        assert response.status_code == 201
+        assert AgentChunk.objects.filter(agent=agent, chunk=chunk).exists()
+
+    def test_list_agent_chunks(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        chunk = Chunk.objects.create(title="Chunk", content="Content", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+        response = client.get(f"/agent-builder/api/agents/{agent.pk}/chunks/")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    def test_cross_user_chunk_rejected(self, api_client):
+        """Reject linking a chunk owned by another user to an agent."""
+        client, user = api_client
+        other_user = User.objects.create_user(username="other", password="pass")
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        other_chunk = Chunk.objects.create(title="Other", content="Nope", user=other_user)
+        response = client.post(
+            f"/agent-builder/api/agents/{agent.pk}/chunks/",
+            {"chunk_id": other_chunk.pk, "position": 0},
+            format="json",
+        )
+        assert response.status_code == 403
+        assert AgentChunk.objects.count() == 0

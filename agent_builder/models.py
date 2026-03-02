@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -109,6 +110,10 @@ class AgentChunk(models.Model):
     class Meta:
         ordering = ["position"]
         unique_together = [["agent", "chunk"]]
+
+    def clean(self) -> None:
+        if self.agent_id and self.chunk_id and self.agent.user_id != self.chunk.user_id:
+            raise ValidationError("Agent and chunk must belong to the same user.")
 
     def __str__(self) -> str:
         return f"{self.agent.name} / {self.chunk} @ {self.position}"
