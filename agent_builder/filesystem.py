@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .models import Agent, AgentChunk
 # Default paths
 DEFAULT_CLAUDE_AGENTS_DIR = Path.home() / ".claude" / "agents"
 DEFAULT_CODEROO_AGENTS_DIR = Path.home() / ".config" / "coderoo" / "agents"
+DEFAULT_INSTRUCTIONS_DIR = Path.home() / ".config" / "coderoo" / "instructions"
 
 
 def parse_frontmatter(text: str) -> tuple[str, str]:
@@ -70,9 +72,8 @@ def write_agent(
         md_path = agent_dir / f"{agent.name}.md"
         json5_path = agent_dir / f"{agent.name}.json5"
         md_path.write_text(content)
-        # Write basic config (Phase 2 populates docs.include/reminder from instructions)
-        if not json5_path.exists():
-            json5_path.write_text('{\n  "reminder": [],\n  "docs.include": []\n}')
+        config = generate_coderoo_config(agent)
+        json5_path.write_text(json.dumps(config, indent=2))
         return md_path
 
     raise ValueError(f"Unknown agent source: {agent.source}")
@@ -134,3 +135,44 @@ def read_coderoo_agents(agents_dir: Path | None = None) -> list[dict]:
         except Exception:
             continue
     return agents
+
+
+def write_instruction(instruction, instructions_dir: Path | None = None) -> Path:
+    """Write an instruction to the Coderoo instructions directory."""
+    target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{instruction.name}.md"
+    target_path.write_text(instruction.content)
+    return target_path
+
+
+def read_instructions(instructions_dir: Path | None = None) -> list[dict]:
+    """Read all instruction files from the Coderoo instructions directory."""
+    target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
+    if not target_dir.exists():
+        return []
+    results = []
+    for md_file in sorted(target_dir.glob("*.md")):
+        try:
+            content = md_file.read_text()
+            results.append({"name": md_file.stem, "content": content})
+        except Exception:
+            continue
+    return results
+
+
+def generate_coderoo_config(agent: Agent) -> dict:
+    """Generate Coderoo .json5 config from agent's instruction mappings."""
+    from .models import AgentInstruction
+
+    config: dict = {"docs.include": [], "reminder": []}
+    agent_instructions = AgentInstruction.objects.filter(agent=agent).select_related("instruction")
+
+    for ai in agent_instructions:
+        mode = ai.get_effective_mode()
+        if mode == "auto_inject":
+            config["docs.include"].append(ai.instruction.name)
+        elif mode == "on_demand":
+            config["reminder"].append([ai.instruction.name, ai.instruction.display_name])
+
+    return config
