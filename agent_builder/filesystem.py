@@ -12,8 +12,8 @@ from .models import Agent, AgentChunk
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".tox", ".venv", "venv"}
 CONFIG_FILENAMES = {"CLAUDE.md", "AGENTS.md"}
 DEFAULT_SCAN_ROOTS = [
-    Path.home() / "Projects",
     Path("/storage/Projects"),
+    Path.home() / "Projects",
 ]
 DEFAULT_EXTRA_PATHS = [
     Path.home() / ".claude" / "CLAUDE.md",
@@ -221,7 +221,7 @@ def read_config_files(
                     results.append(
                         {
                             "filename": file_path.name,
-                            "path": str(file_path),
+                            "path": resolved,
                             "content": file_path.read_text(),
                         }
                     )
@@ -265,7 +265,7 @@ def _scan_dir(
                     results.append(
                         {
                             "filename": entry.name,
-                            "path": str(entry),
+                            "path": resolved,
                             "content": entry.read_text(),
                         }
                     )
@@ -332,7 +332,7 @@ def _scan_for_coderoo_projects(
             continue
         coderoo_dir = entry / ".coderoo"
         if coderoo_dir.is_dir():
-            path_str = str(entry)
+            path_str = str(entry.resolve())
             if path_str in projects:
                 projects[path_str]["has_coderoo"] = True
             else:
@@ -371,7 +371,7 @@ def _scan_claude_projects(
             # Verify the path actually exists on disk
             if not Path(original_path).is_dir():
                 continue
-            path_str = original_path
+            path_str = str(Path(original_path).resolve())
             if path_str in projects:
                 projects[path_str]["has_claude_config"] = True
             else:

@@ -1,3 +1,4 @@
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView
 from drf_spectacular.generators import SchemaGenerator
 from drf_spectacular.plumbing import normalize_result_object, sanitize_result_object
@@ -5,7 +6,7 @@ from drf_spectacular.utils import extend_schema
 from drf_spectacular.views import SpectacularAPIView
 
 
-class IndexView(TemplateView):
+class IndexView(LoginRequiredMixin, TemplateView):
     template_name = "agent_builder/index.html"
 
 
