@@ -1,9 +1,11 @@
 """URL configuration for agent_builder."""
 
 from django.urls import include, path
+from drf_spectacular.views import SpectacularRedocView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
 from .api_views import AgentChunkViewSet, AgentViewSet, ChunkViewSet, apply_all, import_all
+from .views import CustomSpectacularAPIView, IndexView
 
 app_name = "agent_builder"
 
@@ -27,4 +29,16 @@ urlpatterns = [
         ),
         name="agent-chunks-detail",
     ),
+    path("api/schema/", CustomSpectacularAPIView.as_view(), name="agent-builder-schema"),
+    path(
+        "api/schema/swagger-ui/",
+        SpectacularSwaggerView.as_view(url_name="agent_builder:agent-builder-schema"),
+        name="agent-builder-swagger-ui",
+    ),
+    path(
+        "api/schema/redoc/",
+        SpectacularRedocView.as_view(url_name="agent_builder:agent-builder-schema"),
+        name="agent-builder-redoc",
+    ),
+    path("", IndexView.as_view(), name="agent-builder-index"),
 ]

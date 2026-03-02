@@ -1,19 +1,1184 @@
-{% extends "agent_builder/base.html" %}
-{% load static django_bootstrap5 %}
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Agent Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/dracula.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/default.css" rel="stylesheet">
+    <style>
+        :root {
+            --accent-primary: #667eea;
+            --accent-secondary: #764ba2;
+            --gradient-primary: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+        }
 
-{% block page_title %}agent_builder | Home{% endblock %}
+        [data-bs-theme="dark"] {
+            --bs-body-bg: #0d1117;
+            --bs-card-bg: #161b22;
+            --bs-border-color: #30363d;
+        }
 
-{% block extra_css %}{% endblock %}
-{% block extra_js %}{% endblock %}
+        [data-bs-theme="light"] {
+            --bs-body-bg: #f6f8fa;
+        }
 
-{% block content %}
-    <div class="container">
-    	{% autoescape off %}{% bootstrap_messages %}{% endautoescape %}
+        body {
+            background: var(--bs-body-bg);
+            min-height: 100vh;
+            transition: background 0.3s;
+        }
 
-        <div class="row">
-            <div class="col">
-            	{{ content }}
+        .header-gradient {
+            background: var(--gradient-primary);
+            padding: 1rem 0;
+            margin-bottom: 1.5rem;
+        }
+
+        .main-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 0 20px 20px;
+        }
+
+        .card {
+            border: 1px solid var(--bs-border-color);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .nav-pills .nav-link.active {
+            background: var(--gradient-primary);
+        }
+
+        .nav-pills .nav-link {
+            color: var(--accent-primary);
+            transition: all 0.2s;
+        }
+
+        .nav-pills .nav-link:hover:not(.active) {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .btn-primary {
+            background: var(--gradient-primary);
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
+        }
+
+        .agent-list {
+            max-height: calc(100vh - 340px);
+            overflow-y: auto;
+        }
+
+        .agent-item {
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+            border-radius: 8px;
+        }
+
+        [data-bs-theme="dark"] .agent-item:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: rgba(102, 126, 234, 0.3);
+        }
+
+        [data-bs-theme="light"] .agent-item:hover {
+            background: #f8f9fa;
+            border-color: #dee2e6;
+        }
+
+        .agent-item.active {
+            background: rgba(102, 126, 234, 0.15);
+            border-color: var(--accent-primary);
+            border-left: 3px solid var(--accent-primary);
+        }
+
+        .badge-model {
+            font-size: 0.65em;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-haiku { background: #00bcd4 !important; }
+        .badge-sonnet { background: #9b59b6 !important; }
+        .badge-opus { background: #e74c3c !important; }
+
+        .unsaved-dot {
+            width: 8px;
+            height: 8px;
+            background: #ffc107;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
+        }
+
+        .toast-container {
+            z-index: 1100;
+        }
+
+        .source-badge-claude {
+            background: #6f42c1 !important;
+        }
+
+        .source-badge-coderoo {
+            background: #20c997 !important;
+        }
+
+        /* Search input */
+        .search-input {
+            background: transparent;
+            border: 1px solid var(--bs-border-color);
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+        }
+
+        /* CodeMirror styling */
+        .CodeMirror {
+            height: auto;
+            min-height: 150px;
+            border-radius: 8px;
+            border: 1px solid var(--bs-border-color);
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-size: 13px;
+        }
+
+        [data-bs-theme="light"] .CodeMirror {
+            background: #fff;
+        }
+
+        .CodeMirror-focused {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+        }
+
+        /* Editor sections */
+        .editor-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .editor-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .editor-section-header .btn-group .btn {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        /* Markdown preview */
+        .markdown-preview {
+            padding: 1rem;
+            border: 1px solid var(--bs-border-color);
+            border-radius: 8px;
+            min-height: 150px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        [data-bs-theme="dark"] .markdown-preview {
+            background: #0d1117;
+        }
+
+        [data-bs-theme="light"] .markdown-preview {
+            background: #fff;
+        }
+
+        .markdown-preview h1, .markdown-preview h2, .markdown-preview h3 {
+            border-bottom: 1px solid var(--bs-border-color);
+            padding-bottom: 0.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .markdown-preview h1:first-child, .markdown-preview h2:first-child {
+            margin-top: 0;
+        }
+
+        .markdown-preview code {
+            background: rgba(102, 126, 234, 0.1);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.875em;
+        }
+
+        .markdown-preview pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+
+        .markdown-preview pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        /* Split view */
+        .split-container {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .split-container > div {
+            flex: 1;
+            min-width: 0;
+        }
+
+        /* Keyboard shortcut hints */
+        .kbd {
+            font-family: 'SF Mono', monospace;
+            font-size: 0.75em;
+            background: rgba(102, 126, 234, 0.15);
+            border: 1px solid var(--bs-border-color);
+            border-radius: 4px;
+            padding: 0.15rem 0.4rem;
+        }
+
+        /* Theme toggle */
+        .theme-toggle {
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            font-size: 0.8rem;
+            color: var(--bs-secondary-color);
+            border-top: 1px solid var(--bs-border-color);
+            padding-top: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+            color: var(--bs-secondary-color);
+        }
+
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bs-border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-primary);
+        }
+
+        /* View mode buttons */
+        .view-mode-btn.active {
+            background: var(--accent-primary) !important;
+            color: white !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header-gradient">
+        <div class="main-container">
+            <div class="d-flex justify-content-between align-items-center">
+                <h1 class="text-white mb-0 fs-4">
+                    <i class="bi bi-robot"></i> Agent Manager
+                </h1>
+                <div class="d-flex gap-3 align-items-center">
+                    <span id="unsavedIndicator" class="d-none align-items-center">
+                        <span class="unsaved-dot"></span>
+                        <span class="text-white-50 ms-2 small">Unsaved changes</span>
+                        <span class="kbd ms-2">Ctrl+S</span>
+                    </span>
+                    <div class="theme-toggle text-white" onclick="toggleTheme()" title="Toggle theme (Ctrl+D)">
+                        <i class="bi bi-moon-fill" id="themeIcon"></i>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-{% endblock %}
+
+    <div class="main-container">
+        <div class="row g-4">
+            <!-- Left Column: Agent List -->
+            <div class="col-lg-4 col-xl-3">
+                <div class="card h-100">
+                    <div class="card-header border-0 pt-3 pb-0">
+                        <ul class="nav nav-pills nav-fill mb-3" role="tablist">
+                            <li class="nav-item">
+                                <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#claudeTab">
+                                    <i class="bi bi-terminal"></i> Claude
+                                    <span class="badge bg-secondary ms-1" id="claudeCount">0</span>
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link" data-bs-toggle="pill" data-bs-target="#coderooTab">
+                                    <i class="bi bi-kanban"></i> Coderoo
+                                    <span class="badge bg-secondary ms-1" id="coderooCount">0</span>
+                                </button>
+                            </li>
+                        </ul>
+                        <!-- Search -->
+                        <div class="input-group mb-3">
+                            <span class="input-group-text bg-transparent border-end-0">
+                                <i class="bi bi-search"></i>
+                            </span>
+                            <input type="text" class="form-control search-input border-start-0"
+                                   id="searchInput" placeholder="Search agents... (Ctrl+K)"
+                                   oninput="filterAgents()">
+                        </div>
+                    </div>
+                    <div class="card-body pt-0">
+                        <div class="tab-content">
+                            <div class="tab-pane fade show active" id="claudeTab">
+                                <div class="d-flex gap-2 mb-3">
+                                    <button class="btn btn-primary btn-sm flex-grow-1" onclick="createAgent('claude')">
+                                        <i class="bi bi-plus-lg"></i> New Agent
+                                    </button>
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="loadAgents()" title="Refresh">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
+                                <div class="agent-list" id="claudeAgentList">
+                                    <div class="text-center text-muted py-4">
+                                        <div class="spinner-border spinner-border-sm"></div>
+                                        <div class="mt-2">Loading...</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="coderooTab">
+                                <div class="d-flex gap-2 mb-3">
+                                    <button class="btn btn-primary btn-sm flex-grow-1" onclick="createAgent('coderoo')">
+                                        <i class="bi bi-plus-lg"></i> New Agent
+                                    </button>
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="loadAgents()" title="Refresh">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
+                                <div class="agent-list" id="coderooAgentList">
+                                    <div class="text-center text-muted py-4">
+                                        <div class="spinner-border spinner-border-sm"></div>
+                                        <div class="mt-2">Loading...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Editor -->
+            <div class="col-lg-8 col-xl-9">
+                <div class="card">
+                    <div class="card-header border-0 d-flex justify-content-between align-items-center pt-3">
+                        <div>
+                            <h5 class="mb-0" id="editorTitle">
+                                <span class="text-muted">Select an agent</span>
+                            </h5>
+                            <small class="text-muted" id="editorSubtitle"></small>
+                        </div>
+                        <div class="d-flex gap-2 align-items-center">
+                            <div class="btn-group d-none" id="viewModeGroup">
+                                <button class="btn btn-outline-secondary btn-sm view-mode-btn active"
+                                        onclick="setViewMode('edit')" title="Edit mode">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm view-mode-btn"
+                                        onclick="setViewMode('split')" title="Split view">
+                                    <i class="bi bi-layout-split"></i>
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm view-mode-btn"
+                                        onclick="setViewMode('preview')" title="Preview mode">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                            </div>
+                            <button class="btn btn-success btn-sm d-none" id="saveBtn" onclick="saveAgent()">
+                                <i class="bi bi-check-lg"></i> Save
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm d-none" id="deleteBtn" onclick="deleteAgent()">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <!-- Empty State -->
+                        <div id="emptyState" class="empty-state">
+                            <i class="bi bi-file-earmark-code"></i>
+                            <h5>No agent selected</h5>
+                            <p class="text-muted">Select an agent from the list or create a new one</p>
+                            <div class="mt-3">
+                                <small class="text-muted">
+                                    <span class="kbd">Ctrl+K</span> Search &nbsp;
+                                    <span class="kbd">Ctrl+S</span> Save &nbsp;
+                                    <span class="kbd">Esc</span> Deselect
+                                </small>
+                            </div>
+                        </div>
+
+                        <!-- Editor Content -->
+                        <div id="editorContent" class="d-none">
+                            <!-- Frontmatter Section -->
+                            <div class="editor-section">
+                                <div class="editor-section-header">
+                                    <label class="form-label fw-semibold mb-0">
+                                        <i class="bi bi-code-slash text-primary"></i> Frontmatter
+                                        <small class="text-muted fw-normal ms-1">(YAML)</small>
+                                    </label>
+                                    <button class="btn btn-link btn-sm p-0" onclick="toggleSection('frontmatter')">
+                                        <i class="bi bi-chevron-down" id="frontmatterToggle"></i>
+                                    </button>
+                                </div>
+                                <div id="frontmatterContainer">
+                                    <textarea id="frontmatterEditor"></textarea>
+                                </div>
+                            </div>
+
+                            <!-- Config Section (Coderoo only) -->
+                            <div class="editor-section d-none" id="configSection">
+                                <div class="editor-section-header">
+                                    <label class="form-label fw-semibold mb-0">
+                                        <i class="bi bi-gear text-success"></i> Config
+                                        <small class="text-muted fw-normal ms-1">(JSON5)</small>
+                                    </label>
+                                    <button class="btn btn-link btn-sm p-0" onclick="toggleSection('config')">
+                                        <i class="bi bi-chevron-down" id="configToggle"></i>
+                                    </button>
+                                </div>
+                                <div id="configContainer">
+                                    <textarea id="configEditor"></textarea>
+                                </div>
+                            </div>
+
+                            <!-- Instructions Section -->
+                            <div class="editor-section">
+                                <div class="editor-section-header">
+                                    <label class="form-label fw-semibold mb-0">
+                                        <i class="bi bi-file-text text-info"></i> Instructions
+                                        <small class="text-muted fw-normal ms-1">(Markdown)</small>
+                                    </label>
+                                </div>
+                                <div id="contentContainer" class="split-container">
+                                    <div id="contentEditorWrapper">
+                                        <textarea id="contentEditor"></textarea>
+                                    </div>
+                                    <div id="contentPreview" class="markdown-preview d-none"></div>
+                                </div>
+                            </div>
+
+                            <!-- Stats bar -->
+                            <div class="stats-bar d-flex gap-4" id="statsBar">
+                                <span><i class="bi bi-file-text"></i> <span id="lineCount">0</span> lines</span>
+                                <span><i class="bi bi-type"></i> <span id="charCount">0</span> chars</span>
+                                <span><i class="bi bi-clock"></i> Last modified: <span id="lastModified">-</span></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="toast" class="toast" role="alert">
+            <div class="toast-body d-flex align-items-center gap-2">
+                <i class="bi" id="toastIcon"></i>
+                <span id="toastMessage"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Agent Modal -->
+    <div class="modal fade" id="createAgentModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Create New Agent</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" id="createModalClose"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="newAgentName" class="form-label">Name</label>
+                        <input type="text" class="form-control" id="newAgentName"
+                               placeholder="my-agent" oninput="slugifyAgentName()">
+                        <div class="form-text">Auto-converted to slug format (lowercase, hyphens)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="newAgentDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="newAgentDescription" rows="3"
+                                  placeholder="A helpful assistant that specializes in..."></textarea>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="generateWithClaude">
+                        <label class="form-check-label" for="generateWithClaude">
+                            <i class="bi bi-stars text-warning"></i> Generate with Claude
+                        </label>
+                        <div class="form-text">
+                            Let Claude write the full agent instructions based on your description
+                        </div>
+                    </div>
+                    <div id="generateProgress" class="d-none">
+                        <div class="d-flex align-items-center gap-2 text-primary">
+                            <div class="spinner-border spinner-border-sm"></div>
+                            <span>Generating with Claude...</span>
+                        </div>
+                    </div>
+                    <div id="generateError" class="alert alert-danger d-none"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="createAgentBtn" onclick="submitCreateAgent()">
+                        <i class="bi bi-plus-lg"></i> Create
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keyboard shortcuts modal -->
+    <div class="modal fade" id="shortcutsModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-keyboard"></i> Keyboard Shortcuts</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><td><span class="kbd">Ctrl+S</span></td><td>Save agent</td></tr>
+                            <tr><td><span class="kbd">Ctrl+K</span></td><td>Focus search</td></tr>
+                            <tr><td><span class="kbd">Ctrl+D</span></td><td>Toggle dark mode</td></tr>
+                            <tr><td><span class="kbd">Escape</span></td><td>Deselect agent / Clear search</td></tr>
+                            <tr><td><span class="kbd">Ctrl+1/2/3</span></td><td>Edit / Split / Preview mode</td></tr>
+                            <tr><td><span class="kbd">?</span></td><td>Show this help</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/yaml/yaml.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+    <script>
+        // CSRF helpers for Django
+        function getCsrfToken() {
+            return document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        }
+        function apiFetch(url, options = {}) {
+            const defaults = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken(),
+                },
+            };
+            return fetch(url, { ...defaults, ...options, headers: { ...defaults.headers, ...options.headers } });
+        }
+
+        // State
+        let currentAgent = null;
+        let currentAgentId = null;
+        let currentSource = null;
+        let hasUnsavedChanges = false;
+        let allAgents = { claude: [], coderoo: [] };
+        let viewMode = 'edit';
+        let currentCreateSource = null;
+        let createPollInterval = null;
+
+        // CodeMirror editors
+        let frontmatterCM, configCM, contentCM;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initEditors();
+            loadAgents();
+            loadTheme();
+            setupKeyboardShortcuts();
+
+            // Warn on leave
+            window.addEventListener('beforeunload', (e) => {
+                if (hasUnsavedChanges) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
+        });
+
+        function initEditors() {
+            const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+            const theme = isDark ? 'dracula' : 'default';
+
+            frontmatterCM = CodeMirror.fromTextArea(document.getElementById('frontmatterEditor'), {
+                mode: 'yaml',
+                theme: theme,
+                lineNumbers: true,
+                lineWrapping: true,
+                viewportMargin: Infinity
+            });
+            frontmatterCM.setSize(null, 120);
+            frontmatterCM.on('change', markUnsaved);
+
+            configCM = CodeMirror.fromTextArea(document.getElementById('configEditor'), {
+                mode: { name: 'javascript', json: true },
+                theme: theme,
+                lineNumbers: true,
+                lineWrapping: true,
+                viewportMargin: Infinity
+            });
+            configCM.setSize(null, 150);
+            configCM.on('change', markUnsaved);
+
+            contentCM = CodeMirror.fromTextArea(document.getElementById('contentEditor'), {
+                mode: 'markdown',
+                theme: theme,
+                lineNumbers: true,
+                lineWrapping: true,
+                viewportMargin: Infinity
+            });
+            contentCM.setSize(null, 400);
+            contentCM.on('change', () => {
+                markUnsaved();
+                updateStats();
+                if (viewMode !== 'edit') {
+                    updatePreview();
+                }
+            });
+        }
+
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', (e) => {
+                // Ctrl+S: Save
+                if (e.ctrlKey && e.key === 's') {
+                    e.preventDefault();
+                    if (currentAgent) saveAgent();
+                }
+                // Ctrl+K: Focus search
+                if (e.ctrlKey && e.key === 'k') {
+                    e.preventDefault();
+                    document.getElementById('searchInput').focus();
+                }
+                // Ctrl+D: Toggle theme
+                if (e.ctrlKey && e.key === 'd') {
+                    e.preventDefault();
+                    toggleTheme();
+                }
+                // Escape: Deselect / Clear search
+                if (e.key === 'Escape') {
+                    const search = document.getElementById('searchInput');
+                    if (document.activeElement === search) {
+                        search.value = '';
+                        search.blur();
+                        filterAgents();
+                    } else if (currentAgent) {
+                        deselectAgent();
+                    }
+                }
+                // Ctrl+1/2/3: View modes
+                if (e.ctrlKey && e.key === '1') {
+                    e.preventDefault();
+                    setViewMode('edit');
+                }
+                if (e.ctrlKey && e.key === '2') {
+                    e.preventDefault();
+                    setViewMode('split');
+                }
+                if (e.ctrlKey && e.key === '3') {
+                    e.preventDefault();
+                    setViewMode('preview');
+                }
+                // ?: Show shortcuts
+                if (e.key === '?' && !e.target.matches('input, textarea') && !e.target.closest('.CodeMirror')) {
+                    new bootstrap.Modal(document.getElementById('shortcutsModal')).show();
+                }
+            });
+        }
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            const isDark = html.getAttribute('data-bs-theme') === 'dark';
+            const newTheme = isDark ? 'light' : 'dark';
+            html.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+
+            // Update icon
+            const icon = document.getElementById('themeIcon');
+            icon.className = isDark ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
+
+            // Update CodeMirror theme
+            const cmTheme = isDark ? 'default' : 'dracula';
+            frontmatterCM.setOption('theme', cmTheme);
+            configCM.setOption('theme', cmTheme);
+            contentCM.setOption('theme', cmTheme);
+        }
+
+        function loadTheme() {
+            const saved = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-bs-theme', saved);
+            const icon = document.getElementById('themeIcon');
+            icon.className = saved === 'dark' ? 'bi bi-moon-fill' : 'bi bi-sun-fill';
+
+            const cmTheme = saved === 'dark' ? 'dracula' : 'default';
+            if (frontmatterCM) frontmatterCM.setOption('theme', cmTheme);
+            if (configCM) configCM.setOption('theme', cmTheme);
+            if (contentCM) contentCM.setOption('theme', cmTheme);
+        }
+
+        async function loadAgents() {
+            try {
+                const [claudeRes, coderooRes] = await Promise.all([
+                    fetch('/agent-builder/api/agents/?source=claude'),
+                    fetch('/agent-builder/api/agents/?source=coderoo')
+                ]);
+                const claudeData = await claudeRes.json();
+                const coderooData = await coderooRes.json();
+                allAgents.claude = Array.isArray(claudeData) ? claudeData : (claudeData.results || []);
+                allAgents.coderoo = Array.isArray(coderooData) ? coderooData : (coderooData.results || []);
+
+                renderAgentList('claudeAgentList', allAgents.claude, 'claude');
+                renderAgentList('coderooAgentList', allAgents.coderoo, 'coderoo');
+
+                document.getElementById('claudeCount').textContent = allAgents.claude.length;
+                document.getElementById('coderooCount').textContent = allAgents.coderoo.length;
+            } catch (err) {
+                showToast('Failed to load agents: ' + err.message, 'error');
+            }
+        }
+
+        function filterAgents() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+
+            const filteredClaude = allAgents.claude.filter(a =>
+                a.name.toLowerCase().includes(query) ||
+                (a.description || '').toLowerCase().includes(query)
+            );
+            const filteredCoderoo = allAgents.coderoo.filter(a =>
+                a.name.toLowerCase().includes(query) ||
+                (a.description || '').toLowerCase().includes(query)
+            );
+
+            renderAgentList('claudeAgentList', filteredClaude, 'claude');
+            renderAgentList('coderooAgentList', filteredCoderoo, 'coderoo');
+        }
+
+        function renderAgentList(containerId, agents, source) {
+            const container = document.getElementById(containerId);
+            if (agents.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                        No agents found
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = agents.map(agent => `
+                <div class="agent-item p-2 mb-1 ${currentAgentId === agent.id && currentSource === source ? 'active' : ''}"
+                     role="button" tabindex="0"
+                     onclick="selectAgent(${agent.id}, '${agent.name}', '${source}')">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div class="d-flex align-items-center gap-2">
+                            <strong class="text-truncate">${agent.name}</strong>
+                            <span class="badge badge-model badge-${agent.model || 'sonnet'}">${agent.model || 'sonnet'}</span>
+                        </div>
+                        ${agent.color ? `<span class="badge" style="background: ${getColorHex(agent.color)}; width: 12px; height: 12px; padding: 0;"></span>` : ''}
+                    </div>
+                    <small class="text-muted text-truncate d-block" style="font-size: 0.75rem;">
+                        ${(agent.description || 'No description').substring(0, 80)}${(agent.description || '').length > 80 ? '...' : ''}
+                    </small>
+                </div>
+            `).join('');
+        }
+
+        function getColorHex(color) {
+            const colors = {
+                red: '#e74c3c', orange: '#e67e22', yellow: '#f1c40f', green: '#27ae60',
+                blue: '#3498db', purple: '#9b59b6', pink: '#e91e63', cyan: '#00bcd4'
+            };
+            return colors[color] || '#6c757d';
+        }
+
+        async function selectAgent(id, name, source) {
+            if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`/agent-builder/api/agents/${id}/`);
+                if (!res.ok) throw new Error('Agent not found');
+                const agent = await res.json();
+
+                currentAgentId = id;
+                currentAgent = name;
+                currentSource = source;
+
+                // Update UI
+                document.getElementById('editorTitle').innerHTML = `
+                    <span class="badge source-badge-${source} me-2">${source === 'claude' ? 'Claude Code' : 'Coderoo'}</span>
+                    ${name}
+                `;
+                document.getElementById('editorSubtitle').textContent =
+                    source === 'claude'
+                        ? `~/.claude/agents/${name}.md`
+                        : `~/.config/coderoo/agents/${name}/`;
+
+                // Fill editors
+                frontmatterCM.setValue(agent.frontmatter || '');
+                // Content comes from agent_chunks (ordered by position)
+                const agentContent = (agent.agent_chunks || [])
+                    .sort((a, b) => a.position - b.position)
+                    .filter(ac => ac.is_enabled)
+                    .map(ac => ac.chunk.content)
+                    .join('\n\n');
+                contentCM.setValue(agentContent);
+
+                // Config section (Coderoo only)
+                const configSection = document.getElementById('configSection');
+                if (source === 'coderoo') {
+                    configSection.classList.remove('d-none');
+                    configCM.setValue(agent.config || '');
+                } else {
+                    configSection.classList.add('d-none');
+                }
+
+                // Show editor
+                document.getElementById('emptyState').classList.add('d-none');
+                document.getElementById('editorContent').classList.remove('d-none');
+                document.getElementById('saveBtn').classList.remove('d-none');
+                document.getElementById('deleteBtn').classList.remove('d-none');
+                document.getElementById('viewModeGroup').classList.remove('d-none');
+
+                clearUnsaved();
+                updateStats();
+                updatePreview();
+
+                // Refresh editors
+                setTimeout(() => {
+                    frontmatterCM.refresh();
+                    configCM.refresh();
+                    contentCM.refresh();
+                }, 10);
+
+                // Refresh list to update active state
+                filterAgents();
+            } catch (err) {
+                showToast('Failed to load agent: ' + err.message, 'error');
+            }
+        }
+
+        function deselectAgent() {
+            if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
+                return;
+            }
+
+            currentAgentId = null;
+            currentAgent = null;
+            currentSource = null;
+            clearUnsaved();
+
+            document.getElementById('emptyState').classList.remove('d-none');
+            document.getElementById('editorContent').classList.add('d-none');
+            document.getElementById('saveBtn').classList.add('d-none');
+            document.getElementById('deleteBtn').classList.add('d-none');
+            document.getElementById('viewModeGroup').classList.add('d-none');
+            document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
+            document.getElementById('editorSubtitle').textContent = '';
+
+            filterAgents();
+        }
+
+        async function saveAgent() {
+            if (!currentAgentId || !currentSource) return;
+
+            const frontmatter = frontmatterCM.getValue();
+            const content = contentCM.getValue();
+
+            // Extract name from frontmatter
+            const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+            const newName = nameMatch ? nameMatch[1].trim().replace(/^["']|["']$/g, '') : currentAgent;
+
+            const data = {
+                name: newName,
+                source: currentSource,
+                frontmatter: frontmatter,
+            };
+
+            try {
+                const res = await apiFetch(`/agent-builder/api/agents/${currentAgentId}/`, {
+                    method: 'PUT',
+                    body: JSON.stringify(data)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Save failed');
+                }
+
+                currentAgent = newName;
+                clearUnsaved();
+                await loadAgents();
+                filterAgents();
+                showToast(`Saved ${newName}`, 'success');
+            } catch (err) {
+                showToast('Failed to save: ' + err.message, 'error');
+            }
+        }
+
+        function createAgent(source) {
+            currentCreateSource = source;
+            // Reset modal state
+            document.getElementById('newAgentName').value = '';
+            document.getElementById('newAgentDescription').value = '';
+            document.getElementById('generateWithClaude').checked = false;
+            document.getElementById('generateProgress').classList.add('d-none');
+            document.getElementById('generateError').classList.add('d-none');
+            document.getElementById('createAgentBtn').disabled = false;
+            document.getElementById('newAgentName').disabled = false;
+            document.getElementById('newAgentDescription').disabled = false;
+            document.getElementById('generateWithClaude').disabled = false;
+
+            const modal = new bootstrap.Modal(document.getElementById('createAgentModal'));
+            modal.show();
+        }
+
+        function slugifyAgentName() {
+            const input = document.getElementById('newAgentName');
+            let value = input.value.toLowerCase();
+            value = value.replace(/[^a-z0-9-\s]/g, '');
+            value = value.replace(/\s+/g, '-');
+            value = value.replace(/-+/g, '-');
+            input.value = value;
+        }
+
+        async function submitCreateAgent() {
+            const name = document.getElementById('newAgentName').value.trim();
+            const description = document.getElementById('newAgentDescription').value.trim();
+            const generateWithClaude = document.getElementById('generateWithClaude').checked;
+
+            if (!name) {
+                showToast('Please enter an agent name', 'error');
+                return;
+            }
+
+            const slug = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+            if (generateWithClaude && !description) {
+                showToast('Please enter a description for Claude to use', 'error');
+                return;
+            }
+
+            // Disable inputs
+            document.getElementById('createAgentBtn').disabled = true;
+            document.getElementById('newAgentName').disabled = true;
+            document.getElementById('newAgentDescription').disabled = true;
+            document.getElementById('generateWithClaude').disabled = true;
+            document.getElementById('createModalClose').disabled = true;
+            document.getElementById('generateError').classList.add('d-none');
+
+            if (generateWithClaude) {
+                document.getElementById('generateProgress').classList.remove('d-none');
+            }
+
+            const data = {
+                name: slug,
+                source: currentCreateSource,
+                description: description,
+            };
+
+            try {
+                const res = await apiFetch(`/agent-builder/api/agents/`, {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Create failed');
+                }
+
+                const result = await res.json();
+                finishCreateAgent(result.id, slug);
+            } catch (err) {
+                showCreateError(err.message);
+            }
+        }
+
+        function finishCreateAgent(agentId, agentName) {
+            bootstrap.Modal.getInstance(document.getElementById('createAgentModal')).hide();
+            loadAgents().then(() => {
+                selectAgent(agentId, agentName, currentCreateSource);
+            });
+            showToast(`Created ${agentName}`, 'success');
+        }
+
+        function showCreateError(message) {
+            document.getElementById('generateProgress').classList.add('d-none');
+            document.getElementById('generateError').textContent = message;
+            document.getElementById('generateError').classList.remove('d-none');
+            document.getElementById('createAgentBtn').disabled = false;
+            document.getElementById('newAgentName').disabled = false;
+            document.getElementById('newAgentDescription').disabled = false;
+            document.getElementById('generateWithClaude').disabled = false;
+            document.getElementById('createModalClose').disabled = false;
+        }
+
+        async function deleteAgent() {
+            if (!currentAgentId || !currentSource) return;
+
+            if (!confirm(`Delete "${currentAgent}"?`)) return;
+
+            try {
+                const res = await apiFetch(`/agent-builder/api/agents/${currentAgentId}/`, {
+                    method: 'DELETE'
+                });
+
+                if (!res.ok) throw new Error('Delete failed');
+
+                showToast(`Deleted ${currentAgent}`, 'success');
+                deselectAgent();
+                await loadAgents();
+            } catch (err) {
+                showToast('Failed to delete: ' + err.message, 'error');
+            }
+        }
+
+        function setViewMode(mode) {
+            viewMode = mode;
+
+            // Update buttons
+            document.querySelectorAll('.view-mode-btn').forEach((btn, i) => {
+                btn.classList.toggle('active', ['edit', 'split', 'preview'][i] === mode);
+            });
+
+            const editorWrapper = document.getElementById('contentEditorWrapper');
+            const preview = document.getElementById('contentPreview');
+            const container = document.getElementById('contentContainer');
+
+            if (mode === 'edit') {
+                editorWrapper.classList.remove('d-none');
+                preview.classList.add('d-none');
+                container.classList.remove('split-container');
+            } else if (mode === 'split') {
+                editorWrapper.classList.remove('d-none');
+                preview.classList.remove('d-none');
+                container.classList.add('split-container');
+                updatePreview();
+            } else if (mode === 'preview') {
+                editorWrapper.classList.add('d-none');
+                preview.classList.remove('d-none');
+                container.classList.remove('split-container');
+                updatePreview();
+            }
+
+            contentCM.refresh();
+        }
+
+        function updatePreview() {
+            const content = contentCM.getValue();
+            const preview = document.getElementById('contentPreview');
+            preview.innerHTML = marked.parse(content);
+        }
+
+        function updateStats() {
+            const content = contentCM.getValue();
+            document.getElementById('lineCount').textContent = content.split('\n').length;
+            document.getElementById('charCount').textContent = content.length;
+        }
+
+        function toggleSection(section) {
+            const container = document.getElementById(`${section}Container`);
+            const toggle = document.getElementById(`${section}Toggle`);
+            const isHidden = container.style.display === 'none';
+
+            container.style.display = isHidden ? '' : 'none';
+            toggle.className = isHidden ? 'bi bi-chevron-down' : 'bi bi-chevron-right';
+
+            if (isHidden) {
+                if (section === 'frontmatter') frontmatterCM.refresh();
+                if (section === 'config') configCM.refresh();
+            }
+        }
+
+        function markUnsaved() {
+            if (!hasUnsavedChanges) {
+                hasUnsavedChanges = true;
+                document.getElementById('unsavedIndicator').classList.remove('d-none');
+                document.getElementById('unsavedIndicator').classList.add('d-flex');
+            }
+        }
+
+        function clearUnsaved() {
+            hasUnsavedChanges = false;
+            document.getElementById('unsavedIndicator').classList.add('d-none');
+            document.getElementById('unsavedIndicator').classList.remove('d-flex');
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toastIcon');
+            const msg = document.getElementById('toastMessage');
+
+            toast.className = 'toast';
+            if (type === 'success') {
+                toast.classList.add('text-bg-success');
+                icon.className = 'bi bi-check-circle-fill';
+            } else if (type === 'error') {
+                toast.classList.add('text-bg-danger');
+                icon.className = 'bi bi-exclamation-circle-fill';
+            } else {
+                toast.classList.add('text-bg-primary');
+                icon.className = 'bi bi-info-circle-fill';
+            }
+
+            msg.textContent = message;
+            bootstrap.Toast.getOrCreateInstance(toast).show();
+        }
+    </script>
+</body>
+</html>
