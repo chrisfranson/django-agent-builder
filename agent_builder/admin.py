@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
 
 
 class AgentChunkInline(admin.TabularInline):
@@ -30,12 +30,20 @@ class AgentAdmin(admin.ModelAdmin):
     )
 
 
+class ChunkVariantInline(admin.TabularInline):
+    model = ChunkVariant
+    extra = 0
+    fields = ["label", "content", "position"]
+    ordering = ["position"]
+
+
 @admin.register(Chunk)
 class ChunkAdmin(admin.ModelAdmin):
     list_display = ["__str__", "in_library", "user", "updated_at"]
     list_filter = ["in_library"]
     search_fields = ["title", "content"]
     readonly_fields = ["created_at", "updated_at"]
+    inlines = [ChunkVariantInline]
 
 
 @admin.register(Instruction)
