@@ -4,7 +4,15 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularRedocView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
-from .api_views import AgentChunkViewSet, AgentViewSet, ChunkViewSet, apply_all, import_all
+from .api_views import (
+    AgentChunkViewSet,
+    AgentInstructionViewSet,
+    AgentViewSet,
+    ChunkViewSet,
+    InstructionViewSet,
+    apply_all,
+    import_all,
+)
 from .views import CustomSpectacularAPIView, IndexView
 
 app_name = "agent_builder"
@@ -12,6 +20,7 @@ app_name = "agent_builder"
 router = DefaultRouter()
 router.register(r"agents", AgentViewSet, basename="agent")
 router.register(r"chunks", ChunkViewSet, basename="chunk")
+router.register(r"instructions", InstructionViewSet, basename="instruction")
 
 urlpatterns = [
     path("api/import-all/", import_all, name="import-all"),
@@ -28,6 +37,23 @@ urlpatterns = [
             {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
         ),
         name="agent-chunks-detail",
+    ),
+    path(
+        "api/agents/<int:agent_pk>/instructions/",
+        AgentInstructionViewSet.as_view({"get": "list", "post": "create"}),
+        name="agent-instructions-list",
+    ),
+    path(
+        "api/agents/<int:agent_pk>/instructions/<int:pk>/",
+        AgentInstructionViewSet.as_view(
+            {
+                "get": "retrieve",
+                "put": "update",
+                "patch": "partial_update",
+                "delete": "destroy",
+            }
+        ),
+        name="agent-instructions-detail",
     ),
     path("api/schema/", CustomSpectacularAPIView.as_view(), name="agent-builder-schema"),
     path(

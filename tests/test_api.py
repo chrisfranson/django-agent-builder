@@ -2,7 +2,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from agent_builder.models import Agent, AgentChunk, Chunk
+from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
 
 User = get_user_model()
 
@@ -251,3 +251,93 @@ class TestApplyAllEndpoint:
         assert data["results"][0]["name"] == "active-agent"
         written = (tmp_path / ".claude" / "agents" / "active-agent.md").read_text()
         assert "## Active Content" in written
+
+
+@pytest.mark.django_db
+class TestInstructionViewSet:
+    def test_list_instructions_empty(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/instructions/")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_create_instruction(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/instructions/",
+            {
+                "name": "coding-standards",
+                "display_name": "Coding Standards",
+                "content": "Follow PEP 8.",
+                "injection_mode": "on_demand",
+            },
+            format="json",
+        )
+        assert response.status_code == 201
+        assert response.json()["name"] == "coding-standards"
+
+    def test_retrieve_instruction(self, api_client):
+        client, user = api_client
+        instruction = Instruction.objects.create(
+            name="standards", display_name="Standards", content="content", user=user
+        )
+        response = client.get(f"/agent-builder/api/instructions/{instruction.pk}/")
+        assert response.status_code == 200
+        assert response.json()["name"] == "standards"
+
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_instr", password="pass")
+        Instruction.objects.create(
+            name="other-user", display_name="Other", content="content", user=other_user
+        )
+        response = client.get("/agent-builder/api/instructions/")
+        assert response.json() == []
+
+
+@pytest.mark.django_db
+class TestAgentInstructionViewSet:
+    def test_create_agent_instruction(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards", display_name="Standards", content="content", user=user
+        )
+        response = client.post(
+            f"/agent-builder/api/agents/{agent.pk}/instructions/",
+            {"instruction_id": instruction.pk, "injection_mode": "auto_inject"},
+            format="json",
+        )
+        assert response.status_code == 201
+        assert response.json()["injection_mode"] == "auto_inject"
+
+    def test_list_agent_instructions(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="standards", display_name="Standards", content="content", user=user
+        )
+        AgentInstruction.objects.create(agent=agent, instruction=instruction)
+        response = client.get(f"/agent-builder/api/agents/{agent.pk}/instructions/")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    def test_cross_user_instruction_rejected(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_instr2", password="pass")
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        instruction = Instruction.objects.create(
+            name="other", display_name="Other", content="content", user=other_user
+        )
+        response = client.post(
+            f"/agent-builder/api/agents/{agent.pk}/instructions/",
+            {"instruction_id": instruction.pk},
+            format="json",
+        )
+        assert response.status_code == 400

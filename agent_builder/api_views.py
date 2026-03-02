@@ -12,8 +12,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .filesystem import read_claude_agents, read_coderoo_agents, write_agent
-from .models import Agent, AgentChunk, Chunk
-from .serializers import AgentChunkSerializer, AgentListSerializer, AgentSerializer, ChunkSerializer
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, Instruction
+from .serializers import (
+    AgentChunkSerializer,
+    AgentInstructionSerializer,
+    AgentListSerializer,
+    AgentSerializer,
+    ChunkSerializer,
+    InstructionSerializer,
+)
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -83,6 +90,41 @@ class AgentChunkViewSet(viewsets.ModelViewSet):
         if chunk.user != self.request.user:
             raise PermissionDenied("Cannot link a chunk owned by another user.")
         serializer.save(agent_id=self.kwargs["agent_pk"])
+
+
+class InstructionViewSet(viewsets.ModelViewSet):
+    """CRUD for instructions with automatic user scoping."""
+
+    serializer_class = InstructionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Instruction.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class AgentInstructionViewSet(viewsets.ModelViewSet):
+    """Manage instructions attached to a specific agent."""
+
+    serializer_class = AgentInstructionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return AgentInstruction.objects.filter(
+            agent_id=self.kwargs["agent_pk"],
+            agent__user=self.request.user,
+        ).select_related("instruction")
+
+    def perform_create(self, serializer):
+        from rest_framework import serializers as drf_serializers
+
+        agent = Agent.objects.get(pk=self.kwargs["agent_pk"], user=self.request.user)
+        instruction = serializer.validated_data["instruction"]
+        if instruction.user != self.request.user:
+            raise drf_serializers.ValidationError("Instruction must belong to the same user.")
+        serializer.save(agent=agent)
 
 
 @api_view(["POST"])
