@@ -355,14 +355,17 @@
                         <ul class="nav nav-pills nav-fill mb-3" role="tablist">
                             <li class="nav-item">
                                 <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#claudeTab">
-                                    <i class="bi bi-terminal"></i> Claude
-                                    <span class="badge bg-secondary ms-1" id="claudeCount">0</span>
+                                    Claude
                                 </button>
                             </li>
                             <li class="nav-item">
                                 <button class="nav-link" data-bs-toggle="pill" data-bs-target="#coderooTab">
-                                    <i class="bi bi-kanban"></i> Coderoo
-                                    <span class="badge bg-secondary ms-1" id="coderooCount">0</span>
+                                    Coderoo
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link" data-bs-toggle="pill" data-bs-target="#memoryTab">
+                                    Memory
                                 </button>
                             </li>
                         </ul>
@@ -404,6 +407,19 @@
                                     </button>
                                 </div>
                                 <div class="agent-list" id="coderooAgentList">
+                                    <div class="text-center text-muted py-4">
+                                        <div class="spinner-border spinner-border-sm"></div>
+                                        <div class="mt-2">Loading...</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="memoryTab">
+                                <div class="d-flex gap-2 mb-3">
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="loadConfigFiles()" title="Refresh">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
+                                <div class="agent-list" id="memoryFileList">
                                     <div class="text-center text-muted py-4">
                                         <div class="spinner-border spinner-border-sm"></div>
                                         <div class="mt-2">Loading...</div>
@@ -686,8 +702,10 @@
         let currentAgent = null;
         let currentAgentId = null;
         let currentSource = null;
+        let currentConfigFileId = null;
         let hasUnsavedChanges = false;
         let allAgents = { claude: [], coderoo: [] };
+        let allConfigFiles = [];
         let viewMode = 'edit';
         let currentCreateSource = null;
         let createPollInterval = null;
@@ -699,6 +717,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             initEditors();
             loadAgents();
+            loadConfigFiles();
             loadTheme();
             setupKeyboardShortcuts();
 
@@ -757,7 +776,7 @@
                 // Ctrl+S: Save
                 if (e.ctrlKey && e.key === 's') {
                     e.preventDefault();
-                    if (currentAgent) saveAgent();
+                    if (currentAgent || currentConfigFileId) saveAgent();
                 }
                 // Ctrl+K: Focus search
                 if (e.ctrlKey && e.key === 'k') {
@@ -776,7 +795,7 @@
                         search.value = '';
                         search.blur();
                         filterAgents();
-                    } else if (currentAgent) {
+                    } else if (currentAgent || currentConfigFileId) {
                         deselectAgent();
                     }
                 }
@@ -843,9 +862,6 @@
 
                 renderAgentList('claudeAgentList', allAgents.claude, 'claude');
                 renderAgentList('coderooAgentList', allAgents.coderoo, 'coderoo');
-
-                document.getElementById('claudeCount').textContent = allAgents.claude.length;
-                document.getElementById('coderooCount').textContent = allAgents.coderoo.length;
             } catch (err) {
                 showToast('Failed to load agents: ' + err.message, 'error');
             }
@@ -862,9 +878,14 @@
                 a.name.toLowerCase().includes(query) ||
                 (a.description || '').toLowerCase().includes(query)
             );
+            const filteredConfig = allConfigFiles.filter(cf =>
+                cf.filename.toLowerCase().includes(query) ||
+                cf.path.toLowerCase().includes(query)
+            );
 
             renderAgentList('claudeAgentList', filteredClaude, 'claude');
             renderAgentList('coderooAgentList', filteredCoderoo, 'coderoo');
+            renderConfigFileList(filteredConfig);
         }
 
         function renderAgentList(containerId, agents, source) {
@@ -904,6 +925,90 @@
             return colors[color] || '#6c757d';
         }
 
+        async function loadConfigFiles() {
+            try {
+                const res = await apiFetch('/agent-builder/api/config-files/');
+                const data = await res.json();
+                allConfigFiles = Array.isArray(data) ? data : (data.results || []);
+                renderConfigFileList(allConfigFiles);
+            } catch (err) {
+                showToast('Failed to load config files: ' + err.message, 'error');
+            }
+        }
+
+        function renderConfigFileList(files) {
+            const container = document.getElementById('memoryFileList');
+            if (files.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                        No config files found
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = files.map(cf => `
+                <div class="agent-item p-2 mb-1 ${currentConfigFileId === cf.id ? 'active' : ''}"
+                     role="button" tabindex="0"
+                     onclick="selectConfigFile(${cf.id})">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-file-earmark-text text-muted flex-shrink-0"></i>
+                        <small class="text-truncate d-block" style="font-size: 0.8rem;">${cf.path}</small>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function selectConfigFile(id) {
+            if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
+                return;
+            }
+
+            try {
+                const res = await apiFetch(`/agent-builder/api/config-files/${id}/`);
+                if (!res.ok) throw new Error('Config file not found');
+                const cf = await res.json();
+
+                // Clear agent selection state
+                currentAgentId = null;
+                currentAgent = null;
+                currentSource = null;
+                currentConfigFileId = cf.id;
+
+                // Update UI
+                document.getElementById('editorTitle').innerHTML = `
+                    <span class="badge bg-secondary me-2">Memory</span>
+                    ${cf.filename}
+                `;
+                document.getElementById('editorSubtitle').textContent = cf.path;
+
+                // Hide agent-specific sections, show content only
+                document.getElementById('frontmatterContainer').parentElement.classList.add('d-none');
+                document.getElementById('configSection').classList.add('d-none');
+
+                // Show editor
+                document.getElementById('emptyState').classList.add('d-none');
+                document.getElementById('editorContent').classList.remove('d-none');
+                document.getElementById('saveBtn').classList.remove('d-none');
+                document.getElementById('deleteBtn').classList.add('d-none');
+                document.getElementById('viewModeGroup').classList.remove('d-none');
+
+                contentCM.setValue(cf.content || '');
+
+                clearUnsaved();
+                updateStats();
+
+                setTimeout(() => {
+                    contentCM.refresh();
+                }, 10);
+
+                // Refresh list to update active state
+                renderConfigFileList(allConfigFiles);
+            } catch (err) {
+                showToast('Failed to load config file: ' + err.message, 'error');
+            }
+        }
+
         async function selectAgent(id, name, source) {
             if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
                 return;
@@ -917,6 +1022,10 @@
                 currentAgentId = id;
                 currentAgent = name;
                 currentSource = source;
+                currentConfigFileId = null;
+
+                // Show agent-specific sections
+                document.getElementById('frontmatterContainer').parentElement.classList.remove('d-none');
 
                 // Update UI
                 document.getElementById('editorTitle').innerHTML = `
@@ -980,7 +1089,11 @@
             currentAgentId = null;
             currentAgent = null;
             currentSource = null;
+            currentConfigFileId = null;
             clearUnsaved();
+
+            // Re-show agent-specific sections for next selection
+            document.getElementById('frontmatterContainer').parentElement.classList.remove('d-none');
 
             document.getElementById('emptyState').classList.remove('d-none');
             document.getElementById('editorContent').classList.add('d-none');
@@ -994,6 +1107,30 @@
         }
 
         async function saveAgent() {
+            // Save config file
+            if (currentConfigFileId) {
+                const content = contentCM.getValue();
+                try {
+                    const res = await apiFetch(`/agent-builder/api/config-files/${currentConfigFileId}/`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ content: content })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || 'Save failed');
+                    }
+
+                    clearUnsaved();
+                    await loadConfigFiles();
+                    showToast('Saved config file', 'success');
+                } catch (err) {
+                    showToast('Failed to save: ' + err.message, 'error');
+                }
+                return;
+            }
+
+            // Save agent
             if (!currentAgentId || !currentSource) return;
 
             const frontmatter = frontmatterCM.getValue();
@@ -1273,8 +1410,9 @@
                     showToast(`Nothing new to import (${skipped} already exist)`, 'info');
                 }
 
-                // Refresh agent lists
+                // Refresh lists
                 loadAgents();
+                loadConfigFiles();
             } catch (err) {
                 showToast(`Import failed: ${err.message}`, 'error');
             } finally {
