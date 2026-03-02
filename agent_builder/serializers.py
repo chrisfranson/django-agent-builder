@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction, Revision
 
 
 class ChunkVariantSerializer(serializers.ModelSerializer):
@@ -109,3 +109,18 @@ class AgentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Agent
         fields = ["id", "name", "display_name", "source", "description", "model", "is_active"]
+
+
+class RevisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Revision
+        fields = [
+            "id",
+            "content_type",
+            "object_id",
+            "content_snapshot",
+            "message",
+            "user",
+            "created_at",
+        ]
+        read_only_fields = fields

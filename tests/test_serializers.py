@@ -4,6 +4,7 @@ Tests for agent_builder serializers.
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 
 from agent_builder.models import (
     Agent,
@@ -12,6 +13,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Revision,
 )
 from agent_builder.serializers import (
     AgentChunkSerializer,
@@ -21,6 +23,7 @@ from agent_builder.serializers import (
     ChunkSerializer,
     ChunkVariantSerializer,
     InstructionSerializer,
+    RevisionSerializer,
 )
 
 User = get_user_model()
@@ -164,3 +167,35 @@ class TestAgentInstructionSerializer:
         assert data["instruction"]["name"] == "standards"
         assert data["injection_mode"] == "auto_inject"
         assert "instruction_id" not in data  # write-only
+
+
+@pytest.mark.django_db
+class TestRevisionSerializer:
+    def test_serialize_revision(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "content"},
+            message="Initial",
+            user=user,
+        )
+        serializer = RevisionSerializer(revision)
+        data = serializer.data
+        assert data["id"] == revision.pk
+        assert data["content_type"] == ct.pk
+        assert data["object_id"] == chunk.pk
+        assert data["content_snapshot"]["content"] == "content"
+        assert data["message"] == "Initial"
+        assert "created_at" in data
+
+    def test_revision_is_read_only(self, user):
+        data = {
+            "content_type": 1,
+            "object_id": 1,
+            "content_snapshot": {"content": "test"},
+        }
+        serializer = RevisionSerializer(data=data)
+        # Serializer should be read-only — all fields are read_only
+        assert serializer.is_valid()  # Valid because no writable fields
