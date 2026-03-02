@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Agent, AgentChunk
+
+
+def _get_file_mtime(path: Path) -> datetime | None:
+    """Get a file's modified time as a timezone-aware datetime."""
+    try:
+        ts = os.path.getmtime(path)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (FileNotFoundError, PermissionError):
+        return None
+
 
 # Config file scanning
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".tox", ".venv", "venv"}
@@ -62,10 +74,10 @@ def write_agent(
     agent: Agent,
     claude_agents_dir: Path | None = None,
     coderoo_agents_dir: Path | None = None,
-) -> Path:
+) -> tuple[Path, datetime | None]:
     """Write an agent to the appropriate filesystem location.
 
-    Returns the path of the primary file written.
+    Returns (path, mtime) -- the path of the primary file written and its new mtime.
     """
     content = render_agent(agent)
 
@@ -74,7 +86,7 @@ def write_agent(
         target_dir.mkdir(parents=True, exist_ok=True)
         file_path = target_dir / f"{agent.name}.md"
         file_path.write_text(content)
-        return file_path
+        return file_path, _get_file_mtime(file_path)
 
     elif agent.source == "coderoo":
         target_dir = coderoo_agents_dir or DEFAULT_CODEROO_AGENTS_DIR
@@ -88,7 +100,7 @@ def write_agent(
         else:
             config = generate_coderoo_config(agent)
             json5_path.write_text(json.dumps(config, indent=2))
-        return md_path
+        return md_path, _get_file_mtime(md_path)
 
     raise ValueError(f"Unknown agent source: {agent.source}")
 
@@ -110,6 +122,7 @@ def read_claude_agents(agents_dir: Path | None = None) -> list[dict]:
                     "source": "claude",
                     "frontmatter": frontmatter,
                     "content": content,
+                    "mtime": _get_file_mtime(file_path),
                 }
             )
         except Exception:
@@ -144,6 +157,7 @@ def read_coderoo_agents(agents_dir: Path | None = None) -> list[dict]:
                     "frontmatter": frontmatter,
                     "content": content,
                     "config": config,
+                    "mtime": _get_file_mtime(md_file),
                 }
             )
         except Exception:
@@ -151,13 +165,15 @@ def read_coderoo_agents(agents_dir: Path | None = None) -> list[dict]:
     return agents
 
 
-def write_instruction(instruction, instructions_dir: Path | None = None) -> Path:
+def write_instruction(
+    instruction, instructions_dir: Path | None = None
+) -> tuple[Path, datetime | None]:
     """Write an instruction to the Coderoo instructions directory."""
     target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{instruction.name}.md"
     target_path.write_text(instruction.content)
-    return target_path
+    return target_path, _get_file_mtime(target_path)
 
 
 def read_instructions(instructions_dir: Path | None = None) -> list[dict]:
@@ -169,7 +185,9 @@ def read_instructions(instructions_dir: Path | None = None) -> list[dict]:
     for md_file in sorted(target_dir.glob("*.md")):
         try:
             content = md_file.read_text()
-            results.append({"name": md_file.stem, "content": content})
+            results.append(
+                {"name": md_file.stem, "content": content, "mtime": _get_file_mtime(md_file)}
+            )
         except Exception:
             continue
     return results
@@ -223,6 +241,7 @@ def read_config_files(
                             "filename": file_path.name,
                             "path": resolved,
                             "content": file_path.read_text(),
+                            "mtime": _get_file_mtime(file_path),
                         }
                     )
                     seen_paths.add(resolved)
@@ -267,6 +286,7 @@ def _scan_dir(
                             "filename": entry.name,
                             "path": resolved,
                             "content": entry.read_text(),
+                            "mtime": _get_file_mtime(entry),
                         }
                     )
                     seen_paths.add(resolved)
@@ -385,9 +405,9 @@ def _scan_claude_projects(
             continue
 
 
-def write_config_file(config_file) -> Path:
+def write_config_file(config_file) -> tuple[Path, datetime | None]:
     """Write a ConfigFile's content back to disk."""
     target = Path(config_file.path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(config_file.content)
-    return target
+    return target, _get_file_mtime(target)

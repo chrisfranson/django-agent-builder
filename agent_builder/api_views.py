@@ -85,7 +85,13 @@ class AgentViewSet(viewsets.ModelViewSet):
         """Write this agent to disk."""
         agent = self.get_object()
         try:
-            path = write_agent(agent)
+            path, mtime = write_agent(agent)
+            from django.utils import timezone as tz
+
+            Agent.objects.filter(pk=agent.pk).update(
+                file_mtime=mtime,
+                last_synced_at=tz.now(),
+            )
             return Response({"status": "ok", "path": str(path)})
         except Exception as e:
             return Response({"status": "error", "detail": str(e)}, status=500)
@@ -417,60 +423,167 @@ def split_chunk(request, pk):
 @perm_classes([IsAuthenticated])
 def import_all(request):
     """Bulk import agents from disk into the database."""
+    from django.utils import timezone as tz
+
+    from .sync import SyncStatus, detect_import_status
+
+    now = tz.now()
     imported = 0
     skipped = 0
+    updated = 0
+    conflicts = []
 
-    for agent_data in read_claude_agents():
-        if Agent.objects.filter(user=request.user, name=agent_data["name"]).exists():
-            skipped += 1
+    for agent_data in read_claude_agents() + read_coderoo_agents():
+        existing = Agent.objects.filter(user=request.user, name=agent_data["name"]).first()
+
+        if existing is None:
+            # New agent -- import it
+            agent = _import_agent(request.user, agent_data)
+            Agent.objects.filter(pk=agent.pk).update(
+                file_mtime=agent_data.get("mtime"),
+                last_synced_at=now,
+            )
+            imported += 1
             continue
-        _import_agent(request.user, agent_data)
-        imported += 1
 
-    for agent_data in read_coderoo_agents():
-        if Agent.objects.filter(user=request.user, name=agent_data["name"]).exists():
+        status = detect_import_status(
+            disk_mtime=agent_data.get("mtime"),
+            stored_file_mtime=existing.file_mtime,
+            db_updated_at=existing.updated_at,
+            last_synced_at=existing.last_synced_at,
+        )
+
+        if status == SyncStatus.UNCHANGED:
             skipped += 1
-            continue
-        _import_agent(request.user, agent_data)
-        imported += 1
+        elif status == SyncStatus.DISK_ONLY:
+            _update_agent_from_disk(existing, agent_data, now)
+            updated += 1
+        elif status == SyncStatus.NEW_ON_DISK:
+            # Never synced -- update from disk
+            _update_agent_from_disk(existing, agent_data, now)
+            updated += 1
+        elif status == SyncStatus.CONFLICT:
+            conflicts.append(
+                {
+                    "type": "agent",
+                    "name": agent_data["name"],
+                    "source": agent_data["source"],
+                    "conflict_type": "both_modified",
+                }
+            )
+        else:
+            skipped += 1
 
+    # Instructions
     instructions_imported = 0
     instructions_skipped = 0
-    for instr_data in read_instructions():
-        if Instruction.objects.filter(user=request.user, name=instr_data["name"]).exists():
-            instructions_skipped += 1
-            continue
-        Instruction.objects.create(
-            name=instr_data["name"],
-            display_name=instr_data["name"].replace("-", " ").title(),
-            content=instr_data["content"],
-            user=request.user,
-        )
-        instructions_imported += 1
+    instructions_updated = 0
+    instruction_conflicts = []
 
-    # Import config files (CLAUDE.md, AGENTS.md)
+    for instr_data in read_instructions():
+        existing = Instruction.objects.filter(user=request.user, name=instr_data["name"]).first()
+
+        if existing is None:
+            inst = Instruction.objects.create(
+                name=instr_data["name"],
+                display_name=instr_data["name"].replace("-", " ").title(),
+                content=instr_data["content"],
+                user=request.user,
+            )
+            Instruction.objects.filter(pk=inst.pk).update(
+                file_mtime=instr_data.get("mtime"),
+                last_synced_at=now,
+            )
+            instructions_imported += 1
+            continue
+
+        status = detect_import_status(
+            disk_mtime=instr_data.get("mtime"),
+            stored_file_mtime=existing.file_mtime,
+            db_updated_at=existing.updated_at,
+            last_synced_at=existing.last_synced_at,
+        )
+
+        if status == SyncStatus.UNCHANGED:
+            instructions_skipped += 1
+        elif status in (SyncStatus.DISK_ONLY, SyncStatus.NEW_ON_DISK):
+            existing.content = instr_data["content"]
+            existing.save()
+            Instruction.objects.filter(pk=existing.pk).update(
+                file_mtime=instr_data.get("mtime"),
+                last_synced_at=now,
+            )
+            instructions_updated += 1
+        elif status == SyncStatus.CONFLICT:
+            instruction_conflicts.append(
+                {
+                    "type": "instruction",
+                    "name": instr_data["name"],
+                    "conflict_type": "both_modified",
+                }
+            )
+        else:
+            instructions_skipped += 1
+
+    # Config files
     config_files_imported = 0
     config_files_skipped = 0
-    for cf_data in read_config_files():
-        if ConfigFile.objects.filter(user=request.user, path=cf_data["path"]).exists():
-            config_files_skipped += 1
-            continue
-        ConfigFile.objects.create(
-            filename=cf_data["filename"],
-            path=cf_data["path"],
-            content=cf_data["content"],
-            user=request.user,
-        )
-        config_files_imported += 1
+    config_files_updated = 0
+    config_file_conflicts = []
 
-    # Import projects
+    for cf_data in read_config_files():
+        existing = ConfigFile.objects.filter(user=request.user, path=cf_data["path"]).first()
+
+        if existing is None:
+            cf = ConfigFile.objects.create(
+                filename=cf_data["filename"],
+                path=cf_data["path"],
+                content=cf_data["content"],
+                user=request.user,
+            )
+            ConfigFile.objects.filter(pk=cf.pk).update(
+                file_mtime=cf_data.get("mtime"),
+                last_synced_at=now,
+            )
+            config_files_imported += 1
+            continue
+
+        status = detect_import_status(
+            disk_mtime=cf_data.get("mtime"),
+            stored_file_mtime=existing.file_mtime,
+            db_updated_at=existing.updated_at,
+            last_synced_at=existing.last_synced_at,
+        )
+
+        if status == SyncStatus.UNCHANGED:
+            config_files_skipped += 1
+        elif status in (SyncStatus.DISK_ONLY, SyncStatus.NEW_ON_DISK):
+            existing.content = cf_data["content"]
+            existing.save()
+            ConfigFile.objects.filter(pk=existing.pk).update(
+                file_mtime=cf_data.get("mtime"),
+                last_synced_at=now,
+            )
+            config_files_updated += 1
+        elif status == SyncStatus.CONFLICT:
+            config_file_conflicts.append(
+                {
+                    "type": "config_file",
+                    "name": cf_data["filename"],
+                    "path": cf_data["path"],
+                    "conflict_type": "both_modified",
+                }
+            )
+        else:
+            config_files_skipped += 1
+
+    # Import projects (unchanged -- no mtime tracking for projects)
     projects_imported = 0
     projects_updated = 0
     projects_skipped = 0
     for proj_data in scan_projects():
         existing = Project.objects.filter(user=request.user, path=proj_data["path"]).first()
         if existing:
-            # Update detection flags if they changed
             changed = False
             if proj_data["has_coderoo"] and not existing.has_coderoo:
                 existing.has_coderoo = True
@@ -493,15 +606,21 @@ def import_all(request):
         )
         projects_imported += 1
 
+    all_conflicts = conflicts + instruction_conflicts + config_file_conflicts
+
     return Response(
         {
             "status": "ok",
             "imported": imported,
             "skipped": skipped,
+            "updated": updated,
             "instructions_imported": instructions_imported,
             "instructions_skipped": instructions_skipped,
+            "instructions_updated": instructions_updated,
             "config_files_imported": config_files_imported,
             "config_files_skipped": config_files_skipped,
+            "config_files_updated": config_files_updated,
+            "conflicts": all_conflicts,
             "projects_imported": projects_imported,
             "projects_updated": projects_updated,
             "projects_skipped": projects_skipped,
@@ -513,19 +632,94 @@ def import_all(request):
 @perm_classes([IsAuthenticated])
 def apply_all(request):
     """Write all active agents and instructions to disk."""
+    from pathlib import Path as _Path
+
+    from django.utils import timezone as tz
+
+    from .filesystem import (
+        DEFAULT_CLAUDE_AGENTS_DIR,
+        DEFAULT_CODEROO_AGENTS_DIR,
+        DEFAULT_INSTRUCTIONS_DIR,
+        _get_file_mtime,
+    )
+    from .sync import SyncStatus, detect_apply_status
+
+    now = tz.now()
+    force_paths = set(request.data.get("force_paths", []))
+
     agents = Agent.objects.filter(user=request.user, is_active=True)
     results = []
     for agent in agents:
+        if agent.source == "claude":
+            disk_path = DEFAULT_CLAUDE_AGENTS_DIR / f"{agent.name}.md"
+        elif agent.source == "coderoo":
+            disk_path = DEFAULT_CODEROO_AGENTS_DIR / agent.name / f"{agent.name}.md"
+        else:
+            disk_path = None
+
+        disk_mtime = _get_file_mtime(disk_path) if disk_path else None
+        force_this = str(disk_path) in force_paths if disk_path else False
+
+        if not force_this:
+            status = detect_apply_status(
+                disk_mtime=disk_mtime,
+                stored_file_mtime=agent.file_mtime,
+                db_updated_at=agent.updated_at,
+                last_synced_at=agent.last_synced_at,
+            )
+
+            if status == SyncStatus.UNCHANGED:
+                results.append({"name": agent.name, "status": "unchanged"})
+                continue
+            elif status == SyncStatus.CONFLICT:
+                results.append(
+                    {"name": agent.name, "status": "conflict", "conflict_type": "both_modified"}
+                )
+                continue
+
         try:
-            path = write_agent(agent)
+            path, mtime = write_agent(agent)
+            Agent.objects.filter(pk=agent.pk).update(
+                file_mtime=mtime,
+                last_synced_at=now,
+            )
             results.append({"name": agent.name, "status": "ok", "path": str(path)})
         except Exception as e:
             results.append({"name": agent.name, "status": "error", "detail": str(e)})
 
     instruction_results = []
     for instruction in Instruction.objects.filter(user=request.user):
+        disk_path = DEFAULT_INSTRUCTIONS_DIR / f"{instruction.name}.md"
+        disk_mtime = _get_file_mtime(disk_path)
+        force_this = str(disk_path) in force_paths
+
+        if not force_this:
+            status = detect_apply_status(
+                disk_mtime=disk_mtime,
+                stored_file_mtime=instruction.file_mtime,
+                db_updated_at=instruction.updated_at,
+                last_synced_at=instruction.last_synced_at,
+            )
+
+            if status == SyncStatus.UNCHANGED:
+                instruction_results.append({"name": instruction.name, "status": "unchanged"})
+                continue
+            elif status == SyncStatus.CONFLICT:
+                instruction_results.append(
+                    {
+                        "name": instruction.name,
+                        "status": "conflict",
+                        "conflict_type": "both_modified",
+                    }
+                )
+                continue
+
         try:
-            path = write_instruction(instruction)
+            path, mtime = write_instruction(instruction)
+            Instruction.objects.filter(pk=instruction.pk).update(
+                file_mtime=mtime,
+                last_synced_at=now,
+            )
             instruction_results.append(
                 {"name": instruction.name, "status": "ok", "path": str(path)}
             )
@@ -536,8 +730,40 @@ def apply_all(request):
 
     config_file_results = []
     for cf in ConfigFile.objects.filter(user=request.user):
+        disk_path = _Path(cf.path)
+        disk_mtime = _get_file_mtime(disk_path)
+        force_this = str(disk_path) in force_paths
+
+        if not force_this:
+            status = detect_apply_status(
+                disk_mtime=disk_mtime,
+                stored_file_mtime=cf.file_mtime,
+                db_updated_at=cf.updated_at,
+                last_synced_at=cf.last_synced_at,
+            )
+
+            if status == SyncStatus.UNCHANGED:
+                config_file_results.append(
+                    {"name": cf.filename, "path": cf.path, "status": "unchanged"}
+                )
+                continue
+            elif status == SyncStatus.CONFLICT:
+                config_file_results.append(
+                    {
+                        "name": cf.filename,
+                        "path": cf.path,
+                        "status": "conflict",
+                        "conflict_type": "both_modified",
+                    }
+                )
+                continue
+
         try:
-            path = write_config_file(cf)
+            path, mtime = write_config_file(cf)
+            ConfigFile.objects.filter(pk=cf.pk).update(
+                file_mtime=mtime,
+                last_synced_at=now,
+            )
             config_file_results.append({"name": cf.filename, "path": str(path), "status": "ok"})
         except Exception as e:
             config_file_results.append({"name": cf.filename, "status": "error", "detail": str(e)})
@@ -554,15 +780,17 @@ def apply_all(request):
 @api_view(["GET"])
 @perm_classes([IsAuthenticated])
 def apply_all_preview(request):
-    """Preview what files would be written by apply-all, with change detection."""
+    """Preview what files would be written by apply-all, with change and conflict detection."""
     from pathlib import Path as _Path
 
     from .filesystem import (
         DEFAULT_CLAUDE_AGENTS_DIR,
         DEFAULT_CODEROO_AGENTS_DIR,
         DEFAULT_INSTRUCTIONS_DIR,
+        _get_file_mtime,
         render_agent,
     )
+    from .sync import SyncStatus, detect_apply_status
 
     def _read_disk(path: _Path) -> str | None:
         """Read file from disk, return None if it doesn't exist."""
@@ -582,13 +810,25 @@ def apply_all_preview(request):
             path = _Path(f"unknown/{agent.name}.md")
         db_content = render_agent(agent)
         disk_content = _read_disk(path)
+        disk_mtime = _get_file_mtime(path)
         has_changes = disk_content is None or disk_content != db_content
+
+        status = detect_apply_status(
+            disk_mtime=disk_mtime,
+            stored_file_mtime=agent.file_mtime,
+            db_updated_at=agent.updated_at,
+            last_synced_at=agent.last_synced_at,
+        )
+        has_conflict = status == SyncStatus.CONFLICT
+
         agent_list.append(
             {
                 "name": agent.name,
                 "source": agent.source,
                 "path": str(path),
                 "has_changes": has_changes,
+                "has_conflict": has_conflict,
+                "sync_status": status.value,
                 "disk_content": disk_content,
                 "db_content": db_content,
             }
@@ -600,12 +840,24 @@ def apply_all_preview(request):
         path = DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md"
         db_content = inst.content
         disk_content = _read_disk(path)
+        disk_mtime = _get_file_mtime(path)
         has_changes = disk_content is None or disk_content != db_content
+
+        status = detect_apply_status(
+            disk_mtime=disk_mtime,
+            stored_file_mtime=inst.file_mtime,
+            db_updated_at=inst.updated_at,
+            last_synced_at=inst.last_synced_at,
+        )
+        has_conflict = status == SyncStatus.CONFLICT
+
         instruction_list.append(
             {
                 "name": inst.name,
                 "path": str(path),
                 "has_changes": has_changes,
+                "has_conflict": has_conflict,
+                "sync_status": status.value,
                 "disk_content": disk_content,
                 "db_content": db_content,
             }
@@ -617,12 +869,24 @@ def apply_all_preview(request):
         path = _Path(cf.path)
         db_content = cf.content
         disk_content = _read_disk(path)
+        disk_mtime = _get_file_mtime(path)
         has_changes = disk_content is None or disk_content != db_content
+
+        status = detect_apply_status(
+            disk_mtime=disk_mtime,
+            stored_file_mtime=cf.file_mtime,
+            db_updated_at=cf.updated_at,
+            last_synced_at=cf.last_synced_at,
+        )
+        has_conflict = status == SyncStatus.CONFLICT
+
         config_file_list.append(
             {
                 "filename": cf.filename,
                 "path": cf.path,
                 "has_changes": has_changes,
+                "has_conflict": has_conflict,
+                "sync_status": status.value,
                 "disk_content": disk_content,
                 "db_content": db_content,
             }
@@ -681,6 +945,32 @@ def _parse_frontmatter_dict(fm_text: str) -> dict:
     if current_key:
         result[current_key] = "\n".join(current_value).strip()
     return result
+
+
+def _update_agent_from_disk(agent: Agent, agent_data: dict, sync_time) -> None:
+    """Update an existing agent with data from disk."""
+    fm_dict = _parse_frontmatter_dict(agent_data["frontmatter"])
+    agent.display_name = fm_dict.get("name", agent_data["name"]).replace("-", " ").title()
+    agent.description = fm_dict.get("description", "")
+    agent.model = fm_dict.get("model", "sonnet")
+    agent.frontmatter = agent_data["frontmatter"]
+    agent.config = agent_data.get("config", "")
+    agent.save()
+
+    # Update the main chunk content
+    main_chunk = AgentChunk.objects.filter(agent=agent, position=0).select_related("chunk").first()
+    if main_chunk and agent_data.get("content"):
+        main_chunk.chunk.content = agent_data["content"]
+        main_chunk.chunk.save()
+    elif agent_data.get("content") and not main_chunk:
+        chunk = Chunk.objects.create(content=agent_data["content"], user=agent.user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+    # Update sync tracking (use update() to avoid touching auto_now)
+    Agent.objects.filter(pk=agent.pk).update(
+        file_mtime=agent_data.get("mtime"),
+        last_synced_at=sync_time,
+    )
 
 
 def _import_agent(user, agent_data: dict) -> Agent:

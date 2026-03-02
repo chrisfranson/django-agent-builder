@@ -77,8 +77,10 @@ class InstructionSerializer(serializers.ModelSerializer):
             "user",
             "created_at",
             "updated_at",
+            "file_mtime",
+            "last_synced_at",
         ]
-        read_only_fields = ["user", "created_at", "updated_at"]
+        read_only_fields = ["user", "created_at", "updated_at", "file_mtime", "last_synced_at"]
 
 
 class AgentInstructionSerializer(serializers.ModelSerializer):
@@ -113,8 +115,10 @@ class AgentSerializer(serializers.ModelSerializer):
             "agent_instructions",
             "created_at",
             "updated_at",
+            "file_mtime",
+            "last_synced_at",
         ]
-        read_only_fields = ["user", "created_at", "updated_at"]
+        read_only_fields = ["user", "created_at", "updated_at", "file_mtime", "last_synced_at"]
 
 
 class AgentListSerializer(serializers.ModelSerializer):
@@ -150,8 +154,26 @@ class ConfigFileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ConfigFile
-        fields = ["id", "filename", "path", "content", "user", "scope", "created_at", "updated_at"]
-        read_only_fields = ["user", "scope", "created_at", "updated_at"]
+        fields = [
+            "id",
+            "filename",
+            "path",
+            "content",
+            "user",
+            "scope",
+            "created_at",
+            "updated_at",
+            "file_mtime",
+            "last_synced_at",
+        ]
+        read_only_fields = [
+            "user",
+            "scope",
+            "created_at",
+            "updated_at",
+            "file_mtime",
+            "last_synced_at",
+        ]
 
 
 class ProjectSerializer(serializers.ModelSerializer):

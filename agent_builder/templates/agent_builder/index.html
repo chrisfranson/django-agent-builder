@@ -279,6 +279,10 @@
         }
         .apply-item-changed { border-left: 3px solid #f0ad4e; }
         .apply-item-new { border-left: 3px solid #3fb950; }
+        .apply-item-conflict {
+            border-left: 3px solid var(--bs-danger) !important;
+            background: rgba(var(--bs-danger-rgb), 0.05) !important;
+        }
         .apply-item-unchanged { opacity: 0.5; }
 
         /* Theme toggle */
@@ -1813,16 +1817,30 @@
                 if (!res.ok) throw new Error(`Import failed: ${res.status}`);
                 const data = await res.json();
 
+                // Show conflicts if any
+                const conflictCount = (data.conflicts || []).length;
+                if (conflictCount > 0) {
+                    const conflictNames = data.conflicts.map(c => c.name).join(', ');
+                    showToast(
+                        `${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} detected: ${conflictNames}. ` +
+                        `Both DB and disk versions were modified since last sync.`,
+                        'warning'
+                    );
+                }
+
                 const parts = [];
-                if (data.imported > 0) parts.push(`${data.imported} agent${data.imported !== 1 ? 's' : ''}`);
-                if (data.instructions_imported > 0) parts.push(`${data.instructions_imported} instruction${data.instructions_imported !== 1 ? 's' : ''}`);
-                if (data.config_files_imported > 0) parts.push(`${data.config_files_imported} config file${data.config_files_imported !== 1 ? 's' : ''}`);
+                if (data.imported > 0) parts.push(`${data.imported} new`);
+                if (data.updated > 0) parts.push(`${data.updated} updated`);
+                if (data.instructions_imported > 0) parts.push(`${data.instructions_imported} new instruction${data.instructions_imported !== 1 ? 's' : ''}`);
+                if (data.instructions_updated > 0) parts.push(`${data.instructions_updated} updated instruction${data.instructions_updated !== 1 ? 's' : ''}`);
+                if (data.config_files_imported > 0) parts.push(`${data.config_files_imported} new config file${data.config_files_imported !== 1 ? 's' : ''}`);
+                if (data.config_files_updated > 0) parts.push(`${data.config_files_updated} updated config file${data.config_files_updated !== 1 ? 's' : ''}`);
 
                 const skipped = (data.skipped || 0) + (data.instructions_skipped || 0) + (data.config_files_skipped || 0);
 
                 if (parts.length > 0) {
-                    showToast(`Imported ${parts.join(', ')}${skipped > 0 ? ` (${skipped} skipped)` : ''}`, 'success');
-                } else {
+                    showToast(`Imported: ${parts.join(', ')}${skipped > 0 ? ` (${skipped} skipped)` : ''}`, 'success');
+                } else if (conflictCount === 0) {
                     showToast(`Nothing new to import (${skipped} already exist)`, 'info');
                 }
 
@@ -1876,36 +1894,43 @@
 
                 // Populate agents
                 renderApplySection('applyAgents', applyPreviewData.agents.map(a =>
-                    ({ label: a.name, path: a.path, badge: a.source, has_changes: a.has_changes, disk_content: a.disk_content, db_content: a.db_content })
+                    ({ label: a.name, path: a.path, badge: a.source, has_changes: a.has_changes, has_conflict: a.has_conflict, disk_content: a.disk_content, db_content: a.db_content })
                 ));
 
                 // Populate instructions
                 renderApplySection('applyInstructions', applyPreviewData.instructions.map(i =>
-                    ({ label: i.name, path: i.path, has_changes: i.has_changes, disk_content: i.disk_content, db_content: i.db_content })
+                    ({ label: i.name, path: i.path, has_changes: i.has_changes, has_conflict: i.has_conflict, disk_content: i.disk_content, db_content: i.db_content })
                 ));
 
                 // Populate config files
                 renderApplySection('applyConfigFiles', applyPreviewData.config_files.map(cf =>
-                    ({ label: cf.filename, path: cf.path, has_changes: cf.has_changes, disk_content: cf.disk_content, db_content: cf.db_content })
+                    ({ label: cf.filename, path: cf.path, has_changes: cf.has_changes, has_conflict: cf.has_conflict, disk_content: cf.disk_content, db_content: cf.db_content })
                 ));
 
-                // Count changed vs unchanged
+                // Count changed vs unchanged vs conflict
                 const allItems = [
                     ...applyPreviewData.agents,
                     ...applyPreviewData.instructions,
                     ...applyPreviewData.config_files,
                 ];
-                const changedCount = allItems.filter(i => i.has_changes).length;
+                const conflictCount = allItems.filter(i => i.has_conflict).length;
+                const changedCount = allItems.filter(i => i.has_changes && !i.has_conflict).length;
                 const unchangedCount = allItems.filter(i => !i.has_changes).length;
 
                 // Show warning and enable button only if there are changes
-                if (changedCount > 0) {
+                if (changedCount > 0 || conflictCount > 0) {
                     document.getElementById('applyWarning').classList.remove('d-none');
-                    const unchangedNote = unchangedCount > 0
-                        ? ` <span class="diff-unchanged-label">(${unchangedCount} file${unchangedCount !== 1 ? 's' : ''} unchanged)</span>`
-                        : '';
-                    document.getElementById('applyWarning').innerHTML =
-                        `<i class="bi bi-exclamation-triangle"></i> ${changedCount} file${changedCount !== 1 ? 's' : ''} will be overwritten.${unchangedNote}`;
+                    let msg = '';
+                    if (changedCount > 0) {
+                        msg += `<i class="bi bi-exclamation-triangle"></i> ${changedCount} file${changedCount !== 1 ? 's' : ''} will be overwritten.`;
+                    }
+                    if (conflictCount > 0) {
+                        msg += ` <span class="text-danger"><i class="bi bi-exclamation-octagon"></i> ${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} detected &mdash; both DB and disk changed. Unchecked by default.</span>`;
+                    }
+                    if (unchangedCount > 0) {
+                        msg += ` <span class="diff-unchanged-label">(${unchangedCount} file${unchangedCount !== 1 ? 's' : ''} unchanged)</span>`;
+                    }
+                    document.getElementById('applyWarning').innerHTML = msg;
                     document.getElementById('applyConfirmBtn').disabled = false;
                 } else {
                     document.getElementById('applyWarning').classList.remove('d-none');
@@ -1931,29 +1956,46 @@
                 return;
             }
 
-            const changedItems = items.filter(i => i.has_changes);
-            const unchangedItems = items.filter(i => !i.has_changes);
+            const changedItems = items.filter(i => i.has_changes || i.has_conflict);
+            const unchangedItems = items.filter(i => !i.has_changes && !i.has_conflict);
 
             section.classList.remove('d-none');
-            count.textContent = changedItems.length > 0
-                ? `${changedItems.length} changed`
-                : `${items.length} unchanged`;
-            count.className = changedItems.length > 0
-                ? 'badge bg-warning text-dark ms-1'
-                : 'badge bg-secondary ms-1';
+            const conflictItemCount = changedItems.filter(i => i.has_conflict).length;
+            if (conflictItemCount > 0) {
+                count.textContent = `${changedItems.length} changed (${conflictItemCount} conflict${conflictItemCount !== 1 ? 's' : ''})`;
+                count.className = 'badge bg-danger ms-1';
+            } else if (changedItems.length > 0) {
+                count.textContent = `${changedItems.length} changed`;
+                count.className = 'badge bg-warning text-dark ms-1';
+            } else {
+                count.textContent = `${items.length} unchanged`;
+                count.className = 'badge bg-secondary ms-1';
+            }
 
             let html = changedItems.map((item, idx) => {
-                const isNew = item.disk_content === null;
-                const statusClass = isNew ? 'apply-item-new' : 'apply-item-changed';
-                const statusBadge = isNew
-                    ? '<span class="badge bg-success">new</span>'
-                    : '<span class="badge bg-warning text-dark">modified</span>';
+                const isConflict = item.has_conflict;
+                const isNew = !isConflict && item.disk_content === null;
+                const isChanged = !isConflict && !isNew;
+
+                let statusBadge, statusClass;
+                if (isConflict) {
+                    statusBadge = '<span class="badge bg-danger">conflict</span>';
+                    statusClass = 'apply-item-conflict';
+                } else if (isNew) {
+                    statusBadge = '<span class="badge bg-success">new</span>';
+                    statusClass = 'apply-item-new';
+                } else {
+                    statusBadge = '<span class="badge bg-warning text-dark">modified</span>';
+                    statusClass = 'apply-item-changed';
+                }
+
+                const isChecked = isConflict ? '' : 'checked';
                 const diffBtn = !isNew
                     ? `<button class="btn btn-outline-secondary btn-sm py-0 px-1" onclick="showDiffForItem('${prefix}', ${idx})" title="View diff"><i class="bi bi-file-diff"></i></button>`
                     : '';
                 return `
                 <label class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1 ${statusClass}">
-                    <input type="checkbox" class="form-check-input mt-0 apply-checkbox" checked
+                    <input type="checkbox" class="form-check-input mt-0 apply-checkbox" ${isChecked}
                            data-path="${item.path}">
                     <span class="text-truncate flex-grow-1" title="${item.path}">
                         <code class="small">${item.path.replace(/^\/home\/[^/]+/, '~')}</code>
@@ -2069,23 +2111,47 @@
             btn.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Applying...';
 
             try {
-                const res = await apiFetch('/agent-builder/api/apply-all/', { method: 'POST' });
+                // Check if user explicitly checked any conflict items
+                const checkedConflicts = document.querySelectorAll('.apply-item-conflict .apply-checkbox:checked');
+                const forceItems = Array.from(checkedConflicts).map(cb => cb.dataset.path);
+
+                const body = {};
+                if (forceItems.length > 0) {
+                    body.force_paths = forceItems;
+                }
+
+                const res = await apiFetch('/agent-builder/api/apply-all/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
                 if (!res.ok) throw new Error(`Apply failed: ${res.status}`);
                 const data = await res.json();
 
-                const okCount = (data.results || []).filter(r => r.status === 'ok').length
-                    + (data.instruction_results || []).filter(r => r.status === 'ok').length
-                    + (data.config_file_results || []).filter(r => r.status === 'ok').length;
-                const errCount = (data.results || []).filter(r => r.status === 'error').length
-                    + (data.instruction_results || []).filter(r => r.status === 'error').length
-                    + (data.config_file_results || []).filter(r => r.status === 'error').length;
+                const allResults = [
+                    ...(data.results || []),
+                    ...(data.instruction_results || []),
+                    ...(data.config_file_results || []),
+                ];
+                const okCount = allResults.filter(r => r.status === 'ok').length;
+                const errCount = allResults.filter(r => r.status === 'error').length;
+                const conflictSkipped = allResults.filter(r => r.status === 'conflict').length;
+                const unchangedCount = allResults.filter(r => r.status === 'unchanged').length;
 
                 bootstrap.Modal.getInstance(document.getElementById('applyConfirmModal')).hide();
 
+                const statusParts = [];
+                if (okCount > 0) statusParts.push(`${okCount} applied`);
+                if (unchangedCount > 0) statusParts.push(`${unchangedCount} unchanged`);
+                if (conflictSkipped > 0) statusParts.push(`${conflictSkipped} conflict${conflictSkipped !== 1 ? 's' : ''} skipped`);
+                if (errCount > 0) statusParts.push(`${errCount} failed`);
+
                 if (errCount > 0) {
-                    showToast(`Applied ${okCount} files, ${errCount} failed`, 'error');
+                    showToast(statusParts.join(', '), 'error');
+                } else if (okCount > 0) {
+                    showToast(statusParts.join(', '), 'success');
                 } else {
-                    showToast(`Applied ${okCount} file${okCount !== 1 ? 's' : ''} to disk`, 'success');
+                    showToast(statusParts.join(', ') || 'Nothing to apply', 'info');
                 }
             } catch (err) {
                 showToast(`Apply failed: ${err.message}`, 'error');

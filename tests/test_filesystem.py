@@ -101,10 +101,11 @@ class TestWriteAgent:
         AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
 
         agents_dir = tmp_path / ".claude" / "agents"
-        result_path = write_agent(agent, claude_agents_dir=agents_dir)
+        result_path, result_mtime = write_agent(agent, claude_agents_dir=agents_dir)
 
         assert result_path.exists()
         assert result_path.name == "test-agent.md"
+        assert result_mtime is not None
         content = result_path.read_text()
         assert "---\nname: test-agent" in content
         assert "## Instructions" in content
@@ -177,9 +178,10 @@ class TestWriteInstruction:
             content="## Coding Standards\n\nFollow PEP 8.",
             user=user,
         )
-        path = write_instruction(instruction, instructions_dir=tmp_path)
+        path, mtime = write_instruction(instruction, instructions_dir=tmp_path)
         assert path.exists()
         assert path.name == "coding-standards.md"
+        assert mtime is not None
         content = path.read_text()
         assert "Coding Standards" in content
         assert "Follow PEP 8" in content
@@ -460,8 +462,9 @@ class TestWriteConfigFile:
             path = str(target)
             content = "# New content"
 
-        result = write_config_file(FakeConfigFile())
-        assert result == target
+        result_path, result_mtime = write_config_file(FakeConfigFile())
+        assert result_path == target
+        assert result_mtime is not None
         assert target.read_text() == "# New content"
 
     def test_write_creates_parent_dirs(self, tmp_path):

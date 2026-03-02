@@ -44,6 +44,16 @@ class Agent(models.Model):
     instructions = models.ManyToManyField("Instruction", through="AgentInstruction", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    file_mtime = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last-seen filesystem modified time at import/apply",
+    )
+    last_synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this item was last imported or applied",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -153,6 +163,16 @@ class Instruction(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    file_mtime = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last-seen filesystem modified time at import/apply",
+    )
+    last_synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this item was last imported or applied",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -237,6 +257,16 @@ class ConfigFile(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    file_mtime = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last-seen filesystem modified time at import/apply",
+    )
+    last_synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this item was last imported or applied",
+    )
 
     class Meta:
         ordering = ["path"]
