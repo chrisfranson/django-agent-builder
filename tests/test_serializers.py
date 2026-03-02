@@ -15,6 +15,7 @@ from agent_builder.models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 from agent_builder.serializers import (
@@ -27,6 +28,8 @@ from agent_builder.serializers import (
     ConfigFileSerializer,
     InstructionSerializer,
     ProfileSerializer,
+    ProjectListSerializer,
+    ProjectSerializer,
     RevisionSerializer,
 )
 
@@ -231,6 +234,54 @@ class TestProfileSerializer:
         assert serializer.is_valid(), serializer.errors
         profile = serializer.save(user=user)
         assert profile.name == "new-config"
+
+
+@pytest.mark.django_db
+class TestProjectSerializer:
+    def test_serialize_project(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        project = Project.objects.create(
+            name="test",
+            path="/test/path",
+            has_coderoo=True,
+            has_claude_config=True,
+            user=user,
+        )
+        serializer = ProjectSerializer(project)
+        data = serializer.data
+        assert data["name"] == "test"
+        assert data["path"] == "/test/path"
+        assert data["has_coderoo"] is True
+        assert data["has_claude_config"] is True
+        assert data["user"] == user.pk
+
+    def test_project_list_serializer_fields(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        project = Project.objects.create(
+            name="test",
+            path="/test",
+            user=user,
+        )
+        serializer = ProjectListSerializer(project)
+        assert set(serializer.data.keys()) == {
+            "id",
+            "name",
+            "path",
+            "has_coderoo",
+            "has_claude_config",
+        }
+
+    def test_user_is_read_only(self):
+        serializer = ProjectSerializer(
+            data={
+                "name": "test",
+                "path": "/test",
+                "has_coderoo": True,
+                "user": 999,
+            }
+        )
+        assert serializer.is_valid(), serializer.errors
+        assert "user" not in serializer.validated_data
 
 
 class TestConfigFileSerializer:

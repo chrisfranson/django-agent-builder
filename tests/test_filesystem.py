@@ -11,6 +11,7 @@ from agent_builder.filesystem import (
     read_config_files,
     read_instructions,
     render_agent,
+    scan_projects,
     write_agent,
     write_config_file,
     write_instruction,
@@ -369,6 +370,86 @@ class TestSymlinkDedup:
 
         result = read_config_files(scan_roots=[tmp_path], extra_paths=[])
         assert len(result) == 2
+
+
+class TestScanProjects:
+    def test_scan_coderoo_projects(self, tmp_path):
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        (proj / ".coderoo").mkdir()
+        results = scan_projects(scan_roots=[tmp_path], claude_projects_dir=tmp_path / "empty")
+        assert len(results) == 1
+        assert results[0]["name"] == "my-project"
+        assert results[0]["has_coderoo"] is True
+        assert results[0]["has_claude_config"] is False
+
+    def test_scan_claude_projects(self, tmp_path):
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        claude_dir = tmp_path / ".claude" / "projects"
+        claude_dir.mkdir(parents=True)
+        entry = claude_dir / "-tmp-my-project"
+        entry.mkdir()
+        (entry / "sessions-index.json").write_text(json.dumps({"originalPath": str(proj)}))
+        results = scan_projects(
+            scan_roots=[tmp_path / "empty"],
+            claude_projects_dir=claude_dir,
+        )
+        assert len(results) == 1
+        assert results[0]["name"] == "my-project"
+        assert results[0]["has_claude_config"] is True
+
+    def test_scan_merges_both_sources(self, tmp_path):
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        (proj / ".coderoo").mkdir()
+        claude_dir = tmp_path / ".claude" / "projects"
+        claude_dir.mkdir(parents=True)
+        entry = claude_dir / "-tmp-my-project"
+        entry.mkdir()
+        (entry / "sessions-index.json").write_text(json.dumps({"originalPath": str(proj)}))
+        results = scan_projects(scan_roots=[tmp_path], claude_projects_dir=claude_dir)
+        assert len(results) == 1
+        assert results[0]["has_coderoo"] is True
+        assert results[0]["has_claude_config"] is True
+
+    def test_scan_skips_nonexistent_claude_paths(self, tmp_path):
+        claude_dir = tmp_path / ".claude" / "projects"
+        claude_dir.mkdir(parents=True)
+        entry = claude_dir / "-nonexistent"
+        entry.mkdir()
+        (entry / "sessions-index.json").write_text(
+            json.dumps({"originalPath": "/nonexistent/path"})
+        )
+        results = scan_projects(scan_roots=[], claude_projects_dir=claude_dir)
+        assert len(results) == 0
+
+    def test_scan_handles_malformed_sessions_index(self, tmp_path):
+        claude_dir = tmp_path / ".claude" / "projects"
+        claude_dir.mkdir(parents=True)
+        entry = claude_dir / "-bad"
+        entry.mkdir()
+        (entry / "sessions-index.json").write_text("not json")
+        results = scan_projects(scan_roots=[], claude_projects_dir=claude_dir)
+        assert len(results) == 0
+
+    def test_scan_empty_roots(self, tmp_path):
+        results = scan_projects(
+            scan_roots=[tmp_path / "empty"],
+            claude_projects_dir=tmp_path / "empty2",
+        )
+        assert results == []
+
+    def test_scan_respects_max_depth(self, tmp_path):
+        deep = tmp_path / "a" / "b" / "c" / "d" / "project"
+        deep.mkdir(parents=True)
+        (deep / ".coderoo").mkdir()
+        results = scan_projects(
+            scan_roots=[tmp_path],
+            claude_projects_dir=tmp_path / "empty",
+            max_depth=3,
+        )
+        assert not any(r["name"] == "project" for r in results)
 
 
 class TestWriteConfigFile:

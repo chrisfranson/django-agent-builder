@@ -17,6 +17,7 @@ from agent_builder.models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 
@@ -461,6 +462,63 @@ class TestProfileModel:
         Profile.objects.create(name="config", snapshot={}, user=user)
         user.delete()
         assert Profile.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestProjectModel:
+    def test_create_project(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        project = Project.objects.create(
+            name="my-project",
+            path="/storage/Projects/my-project",
+            has_coderoo=True,
+            has_claude_config=False,
+            user=user,
+        )
+        assert project.name == "my-project"
+        assert project.has_coderoo is True
+        assert project.has_claude_config is False
+        assert str(project) == "my-project (/storage/Projects/my-project)"
+
+    def test_project_path_unique_per_user(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        Project.objects.create(
+            name="proj",
+            path="/some/path",
+            user=user,
+        )
+        with pytest.raises(IntegrityError):
+            Project.objects.create(
+                name="proj2",
+                path="/some/path",
+                user=user,
+            )
+
+    def test_different_users_same_path(self):
+        user1 = User.objects.create_user(username="user1", password="testpass")
+        user2 = User.objects.create_user(username="user2", password="testpass")
+        Project.objects.create(name="proj", path="/same/path", user=user1)
+        Project.objects.create(name="proj", path="/same/path", user=user2)
+        assert Project.objects.count() == 2
+
+    def test_project_both_flags(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        project = Project.objects.create(
+            name="both",
+            path="/storage/Projects/both",
+            has_coderoo=True,
+            has_claude_config=True,
+            user=user,
+        )
+        assert project.has_coderoo is True
+        assert project.has_claude_config is True
+
+    def test_projects_ordered_by_name(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        Project.objects.create(name="zebra", path="/z", user=user)
+        Project.objects.create(name="alpha", path="/a", user=user)
+        names = list(Project.objects.filter(user=user).values_list("name", flat=True))
+        assert names == ["alpha", "zebra"]
 
 
 class TestConfigFileModel:

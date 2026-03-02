@@ -13,6 +13,7 @@ from .api_views import (
     ConfigFileViewSet,
     InstructionViewSet,
     ProfileViewSet,
+    ProjectViewSet,
     RevisionViewSet,
     apply_all,
     apply_all_preview,
@@ -30,6 +31,7 @@ router.register(r"instructions", InstructionViewSet, basename="instruction")
 router.register(r"profiles", ProfileViewSet, basename="profile")
 router.register(r"revisions", RevisionViewSet, basename="revision")
 router.register(r"config-files", ConfigFileViewSet, basename="configfile")
+router.register(r"projects", ProjectViewSet, basename="project")
 
 urlpatterns = [
     path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),

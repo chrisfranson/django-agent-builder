@@ -9,6 +9,7 @@ from .models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 
@@ -84,3 +85,11 @@ class ConfigFileAdmin(admin.ModelAdmin):
     list_display = ["filename", "path", "user", "updated_at"]
     search_fields = ["filename", "path"]
     readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(Project)
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ["name", "path", "has_coderoo", "has_claude_config", "user", "updated_at"]
+    list_filter = ["has_coderoo", "has_claude_config"]
+    search_fields = ["name", "path"]
+    readonly_fields = ["discovered_at", "created_at", "updated_at"]

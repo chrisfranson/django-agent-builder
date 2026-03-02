@@ -11,6 +11,7 @@ from .models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 
@@ -151,3 +152,26 @@ class ConfigFileSerializer(serializers.ModelSerializer):
         model = ConfigFile
         fields = ["id", "filename", "path", "content", "user", "scope", "created_at", "updated_at"]
         read_only_fields = ["user", "scope", "created_at", "updated_at"]
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = [
+            "id",
+            "name",
+            "path",
+            "has_coderoo",
+            "has_claude_config",
+            "discovered_at",
+            "user",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["user", "discovered_at", "created_at", "updated_at"]
+
+
+class ProjectListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ["id", "name", "path", "has_coderoo", "has_claude_config"]

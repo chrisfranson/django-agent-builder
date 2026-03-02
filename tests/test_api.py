@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -12,6 +14,7 @@ from agent_builder.models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 
@@ -1014,3 +1017,162 @@ class TestImportAllWithConfigFiles:
         data = response.json()
         assert "config_files_imported" in data
         assert data["config_files_imported"] == 1
+
+
+@pytest.mark.django_db
+class TestProjectViewSet:
+    def test_list_projects_empty(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/projects/")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_create_project(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/projects/",
+            {
+                "name": "my-project",
+                "path": "/storage/Projects/my-project",
+                "has_coderoo": True,
+                "has_claude_config": False,
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["name"] == "my-project"
+        assert Project.objects.filter(user=user).count() == 1
+
+    def test_retrieve_project(self, api_client):
+        client, user = api_client
+        project = Project.objects.create(
+            name="test",
+            path="/test/path",
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/projects/{project.pk}/")
+        assert response.status_code == 200
+        assert response.json()["name"] == "test"
+
+    def test_filter_by_has_coderoo(self, api_client):
+        client, user = api_client
+        Project.objects.create(
+            name="coderoo",
+            path="/a",
+            has_coderoo=True,
+            user=user,
+        )
+        Project.objects.create(
+            name="claude",
+            path="/b",
+            has_claude_config=True,
+            user=user,
+        )
+        response = client.get("/agent-builder/api/projects/?has_coderoo=true")
+        assert len(response.json()) == 1
+        assert response.json()[0]["name"] == "coderoo"
+
+    def test_filter_by_has_claude_config(self, api_client):
+        client, user = api_client
+        Project.objects.create(
+            name="coderoo",
+            path="/a",
+            has_coderoo=True,
+            user=user,
+        )
+        Project.objects.create(
+            name="claude",
+            path="/b",
+            has_claude_config=True,
+            user=user,
+        )
+        response = client.get("/agent-builder/api/projects/?has_claude_config=true")
+        assert len(response.json()) == 1
+        assert response.json()[0]["name"] == "claude"
+
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other = User.objects.create_user(username="other", password="pass")
+        Project.objects.create(name="mine", path="/mine", user=user)
+        Project.objects.create(name="theirs", path="/theirs", user=other)
+        response = client.get("/agent-builder/api/projects/")
+        assert len(response.json()) == 1
+        assert response.json()[0]["name"] == "mine"
+
+
+@pytest.mark.django_db
+class TestImportAllProjects:
+    def test_import_all_includes_projects(self, api_client, tmp_path):
+        client, user = api_client
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        (proj / ".coderoo").mkdir()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_SCAN_ROOTS", [tmp_path])
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_PROJECTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", tmp_path / "empty2")
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty3")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty4")
+            response = client.post("/agent-builder/api/import-all/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["projects_imported"] >= 1
+        assert Project.objects.filter(user=user, name="my-project").exists()
+
+    def test_import_all_updates_project_flags(self, api_client, tmp_path):
+        client, user = api_client
+        Project.objects.create(
+            name="my-project",
+            path=str(tmp_path / "my-project"),
+            has_coderoo=True,
+            has_claude_config=False,
+            user=user,
+        )
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        (proj / ".coderoo").mkdir()
+        claude_dir = tmp_path / ".claude" / "projects"
+        claude_dir.mkdir(parents=True)
+        entry = claude_dir / "-tmp-my-project"
+        entry.mkdir()
+        (entry / "sessions-index.json").write_text(json.dumps({"originalPath": str(proj)}))
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_SCAN_ROOTS", [tmp_path])
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_PROJECTS_DIR", claude_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", tmp_path / "empty2")
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty3")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty4")
+            response = client.post("/agent-builder/api/import-all/")
+
+        data = response.json()
+        assert data["projects_updated"] >= 1
+        project = Project.objects.get(user=user, path=str(proj))
+        assert project.has_coderoo is True
+        assert project.has_claude_config is True
+
+    def test_import_all_skips_unchanged_projects(self, api_client, tmp_path):
+        client, user = api_client
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        (proj / ".coderoo").mkdir()
+        Project.objects.create(
+            name="my-project",
+            path=str(proj),
+            has_coderoo=True,
+            has_claude_config=False,
+            user=user,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_SCAN_ROOTS", [tmp_path])
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_PROJECTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", tmp_path / "empty2")
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty3")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty4")
+            response = client.post("/agent-builder/api/import-all/")
+
+        data = response.json()
+        assert data["projects_skipped"] >= 1
+        assert data["projects_imported"] == 0

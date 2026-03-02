@@ -254,6 +254,37 @@ class ConfigFile(models.Model):
         return str(Path(self.path).parent)
 
 
+class Project(models.Model):
+    """A detected project directory (has .coderoo/ and/or Claude Code config)."""
+
+    name = models.CharField(max_length=255, help_text="Project name (derived from directory)")
+    path = models.CharField(max_length=1024, help_text="Absolute filesystem path")
+    has_coderoo = models.BooleanField(default=False, help_text="Has .coderoo/ directory")
+    has_claude_config = models.BooleanField(
+        default=False, help_text="Has entry in ~/.claude/projects/"
+    )
+    discovered_at = models.DateTimeField(auto_now_add=True, help_text="When first discovered")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="projects",
+        help_text="Owner of this project",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [["user", "path"]]
+        indexes = [
+            models.Index(fields=["user", "path"]),
+            models.Index(fields=["user", "name"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.path})"
+
+
 class Revision(models.Model):
     """A content snapshot for revision tracking (generic across models)."""
 

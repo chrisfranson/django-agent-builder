@@ -276,6 +276,115 @@ def _scan_dir(
             _scan_dir(entry, depth + 1, max_depth, seen_paths, results)
 
 
+# Project scanning
+DEFAULT_CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+
+def scan_projects(
+    scan_roots: list[Path] | None = None,
+    claude_projects_dir: Path | None = None,
+    max_depth: int = 3,
+) -> list[dict]:
+    """Scan for project directories.
+
+    Discovers projects by:
+    1. Finding directories with .coderoo/ subdirectory under scan_roots
+    2. Reading Claude Code project entries from ~/.claude/projects/
+
+    Returns:
+        List of dicts with keys: name, path, has_coderoo, has_claude_config.
+    """
+    roots = scan_roots if scan_roots is not None else DEFAULT_SCAN_ROOTS
+    claude_dir = (
+        claude_projects_dir if claude_projects_dir is not None else DEFAULT_CLAUDE_PROJECTS_DIR
+    )
+
+    # Use path as key to merge discoveries
+    projects: dict[str, dict] = {}
+
+    # 1. Scan for .coderoo directories
+    for root in roots:
+        if not root.is_dir():
+            continue
+        _scan_for_coderoo_projects(root, 0, max_depth, projects)
+
+    # 2. Read Claude Code project entries
+    _scan_claude_projects(claude_dir, projects)
+
+    return list(projects.values())
+
+
+def _scan_for_coderoo_projects(
+    directory: Path,
+    depth: int,
+    max_depth: int,
+    projects: dict[str, dict],
+) -> None:
+    """Recursively scan for directories containing .coderoo/."""
+    if depth >= max_depth:
+        return
+    try:
+        entries = sorted(directory.iterdir())
+    except PermissionError:
+        return
+    for entry in entries:
+        if not entry.is_dir() or entry.name in SKIP_DIRS or entry.name.startswith("."):
+            continue
+        coderoo_dir = entry / ".coderoo"
+        if coderoo_dir.is_dir():
+            path_str = str(entry)
+            if path_str in projects:
+                projects[path_str]["has_coderoo"] = True
+            else:
+                projects[path_str] = {
+                    "name": entry.name,
+                    "path": path_str,
+                    "has_coderoo": True,
+                    "has_claude_config": False,
+                }
+        # Continue scanning subdirectories (projects can be nested)
+        _scan_for_coderoo_projects(entry, depth + 1, max_depth, projects)
+
+
+def _scan_claude_projects(
+    claude_projects_dir: Path,
+    projects: dict[str, dict],
+) -> None:
+    """Read Claude Code project entries from ~/.claude/projects/."""
+    if not claude_projects_dir.is_dir():
+        return
+    try:
+        entries = sorted(claude_projects_dir.iterdir())
+    except PermissionError:
+        return
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        sessions_index = entry / "sessions-index.json"
+        if not sessions_index.is_file():
+            continue
+        try:
+            data = json.loads(sessions_index.read_text())
+            original_path = data.get("originalPath")
+            if not original_path:
+                continue
+            # Verify the path actually exists on disk
+            if not Path(original_path).is_dir():
+                continue
+            path_str = original_path
+            if path_str in projects:
+                projects[path_str]["has_claude_config"] = True
+            else:
+                projects[path_str] = {
+                    "name": Path(original_path).name,
+                    "path": path_str,
+                    "has_coderoo": False,
+                    "has_claude_config": True,
+                }
+        except (json.JSONDecodeError, OSError):
+            continue
+
+
 def write_config_file(config_file) -> Path:
     """Write a ConfigFile's content back to disk."""
     target = Path(config_file.path)

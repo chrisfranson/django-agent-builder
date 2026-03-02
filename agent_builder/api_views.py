@@ -22,6 +22,7 @@ from .filesystem import (
     read_coderoo_agents,
     read_config_files,
     read_instructions,
+    scan_projects,
     write_agent,
     write_config_file,
     write_instruction,
@@ -35,6 +36,7 @@ from .models import (
     ConfigFile,
     Instruction,
     Profile,
+    Project,
     Revision,
 )
 from .profiles import capture_snapshot, restore_snapshot
@@ -49,6 +51,8 @@ from .serializers import (
     ConfigFileSerializer,
     InstructionSerializer,
     ProfileSerializer,
+    ProjectListSerializer,
+    ProjectSerializer,
     RevisionSerializer,
 )
 
@@ -328,6 +332,30 @@ class ConfigFileViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 
+class ProjectViewSet(viewsets.ModelViewSet):
+    """CRUD for detected projects."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProjectListSerializer
+        return ProjectSerializer
+
+    def get_queryset(self):
+        qs = Project.objects.filter(user=self.request.user)
+        has_coderoo = self.request.query_params.get("has_coderoo")
+        if has_coderoo is not None:
+            qs = qs.filter(has_coderoo=has_coderoo.lower() == "true")
+        has_claude_config = self.request.query_params.get("has_claude_config")
+        if has_claude_config is not None:
+            qs = qs.filter(has_claude_config=has_claude_config.lower() == "true")
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
 @api_view(["POST"])
 @perm_classes([IsAuthenticated])
 def split_chunk(request, pk):
@@ -435,6 +463,36 @@ def import_all(request):
         )
         config_files_imported += 1
 
+    # Import projects
+    projects_imported = 0
+    projects_updated = 0
+    projects_skipped = 0
+    for proj_data in scan_projects():
+        existing = Project.objects.filter(user=request.user, path=proj_data["path"]).first()
+        if existing:
+            # Update detection flags if they changed
+            changed = False
+            if proj_data["has_coderoo"] and not existing.has_coderoo:
+                existing.has_coderoo = True
+                changed = True
+            if proj_data["has_claude_config"] and not existing.has_claude_config:
+                existing.has_claude_config = True
+                changed = True
+            if changed:
+                existing.save()
+                projects_updated += 1
+            else:
+                projects_skipped += 1
+            continue
+        Project.objects.create(
+            name=proj_data["name"],
+            path=proj_data["path"],
+            has_coderoo=proj_data["has_coderoo"],
+            has_claude_config=proj_data["has_claude_config"],
+            user=request.user,
+        )
+        projects_imported += 1
+
     return Response(
         {
             "status": "ok",
@@ -444,6 +502,9 @@ def import_all(request):
             "instructions_skipped": instructions_skipped,
             "config_files_imported": config_files_imported,
             "config_files_skipped": config_files_skipped,
+            "projects_imported": projects_imported,
+            "projects_updated": projects_updated,
+            "projects_skipped": projects_skipped,
         }
     )
 
