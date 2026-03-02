@@ -14,6 +14,7 @@ from agent_builder.models import (
     AgentInstruction,
     Chunk,
     ChunkVariant,
+    ConfigFile,
     Instruction,
     Profile,
     Revision,
@@ -460,3 +461,61 @@ class TestProfileModel:
         Profile.objects.create(name="config", snapshot={}, user=user)
         user.delete()
         assert Profile.objects.count() == 0
+
+
+class TestConfigFileModel:
+    @pytest.mark.django_db
+    def test_create_config_file(self, user):
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/home/testuser/.claude/CLAUDE.md",
+            content="# Instructions\nBe helpful.",
+            user=user,
+        )
+        assert cf.filename == "CLAUDE.md"
+        assert cf.content == "# Instructions\nBe helpful."
+        assert str(cf) == "/home/testuser/.claude/CLAUDE.md"
+
+    @pytest.mark.django_db
+    def test_config_file_path_unique_per_user(self, user):
+        ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/home/testuser/.claude/CLAUDE.md",
+            content="v1",
+            user=user,
+        )
+        with pytest.raises(IntegrityError):
+            ConfigFile.objects.create(
+                filename="CLAUDE.md",
+                path="/home/testuser/.claude/CLAUDE.md",
+                content="v2",
+                user=user,
+            )
+
+    @pytest.mark.django_db
+    def test_config_files_ordered_by_path(self, user):
+        ConfigFile.objects.create(filename="CLAUDE.md", path="/z/CLAUDE.md", content="", user=user)
+        ConfigFile.objects.create(filename="AGENTS.md", path="/a/AGENTS.md", content="", user=user)
+        paths = list(ConfigFile.objects.filter(user=user).values_list("path", flat=True))
+        assert paths == ["/a/AGENTS.md", "/z/CLAUDE.md"]
+
+    @pytest.mark.django_db
+    def test_config_file_scope(self, user):
+        cf = ConfigFile.objects.create(
+            filename="AGENTS.md",
+            path="/storage/Projects/AGENTS.md",
+            content="",
+            user=user,
+        )
+        assert cf.scope == "/storage/Projects"
+
+    @pytest.mark.django_db
+    def test_config_file_cascade_on_user_delete(self, user):
+        ConfigFile.objects.create(
+            filename="CLAUDE.md",
+            path="/test/CLAUDE.md",
+            content="",
+            user=user,
+        )
+        user.delete()
+        assert ConfigFile.objects.count() == 0

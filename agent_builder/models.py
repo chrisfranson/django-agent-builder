@@ -220,6 +220,37 @@ class Profile(models.Model):
         return self.name
 
 
+class ConfigFile(models.Model):
+    """A project-level config file tracked from the filesystem (CLAUDE.md, AGENTS.md)."""
+
+    filename = models.CharField(max_length=255, help_text="Filename (e.g., CLAUDE.md)")
+    path = models.CharField(max_length=1024, help_text="Absolute filesystem path")
+    content = models.TextField(blank=True, help_text="File content")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="config_files",
+        help_text="Owner of this config file",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["path"]
+        unique_together = [["user", "path"]]
+        indexes = [models.Index(fields=["user", "path"])]
+
+    def __str__(self) -> str:
+        return self.path
+
+    @property
+    def scope(self) -> str:
+        """Directory this config file affects."""
+        from pathlib import Path
+
+        return str(Path(self.path).parent)
+
+
 class Revision(models.Model):
     """A content snapshot for revision tracking (generic across models)."""
 
