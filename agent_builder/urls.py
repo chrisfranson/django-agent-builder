@@ -11,6 +11,7 @@ from .api_views import (
     ChunkVariantViewSet,
     ChunkViewSet,
     InstructionViewSet,
+    RevisionViewSet,
     apply_all,
     import_all,
     split_chunk,
@@ -23,6 +24,7 @@ router = DefaultRouter()
 router.register(r"agents", AgentViewSet, basename="agent")
 router.register(r"chunks", ChunkViewSet, basename="chunk")
 router.register(r"instructions", InstructionViewSet, basename="instruction")
+router.register(r"revisions", RevisionViewSet, basename="revision")
 
 urlpatterns = [
     path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),

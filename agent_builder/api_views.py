@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import difflib
 from typing import TYPE_CHECKING
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import F
 from django.shortcuts import get_object_or_404
@@ -21,8 +23,8 @@ from .filesystem import (
     write_agent,
     write_instruction,
 )
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction
-from .revisions import create_revision
+from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction, Revision
+from .revisions import create_revision, get_snapshot
 from .serializers import (
     AgentChunkSerializer,
     AgentInstructionSerializer,
@@ -31,6 +33,7 @@ from .serializers import (
     ChunkSerializer,
     ChunkVariantSerializer,
     InstructionSerializer,
+    RevisionSerializer,
 )
 
 if TYPE_CHECKING:
@@ -167,6 +170,80 @@ class AgentInstructionViewSet(viewsets.ModelViewSet):
         if instruction.user != self.request.user:
             raise drf_serializers.ValidationError("Instruction must belong to the same user.")
         serializer.save(agent=agent)
+
+
+class RevisionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only access to content revisions with diff and restore actions."""
+
+    serializer_class = RevisionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self) -> QuerySet[Revision]:
+        return Revision.objects.filter(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        ct = request.query_params.get("content_type")
+        obj_id = request.query_params.get("object_id")
+        if not ct or not obj_id:
+            return Response(
+                {"detail": "content_type and object_id query params required."},
+                status=400,
+            )
+        queryset = self.get_queryset().filter(content_type_id=ct, object_id=obj_id)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"])
+    def diff(self, request, pk=None):
+        """Compare this revision to another."""
+        revision = self.get_object()
+        compare_to_id = request.query_params.get("compare_to")
+        if not compare_to_id:
+            return Response({"detail": "compare_to query param required."}, status=400)
+        compare_to = get_object_or_404(self.get_queryset(), pk=compare_to_id)
+        diff_result = {}
+        for key in set(revision.content_snapshot.keys()) | set(compare_to.content_snapshot.keys()):
+            old_val = str(compare_to.content_snapshot.get(key, ""))
+            new_val = str(revision.content_snapshot.get(key, ""))
+            if old_val != new_val:
+                diff_result[key] = list(
+                    difflib.unified_diff(
+                        old_val.splitlines(keepends=True),
+                        new_val.splitlines(keepends=True),
+                        fromfile=f"revision {compare_to.pk}",
+                        tofile=f"revision {revision.pk}",
+                    )
+                )
+        return Response({"diff": diff_result})
+
+    @action(detail=True, methods=["post"])
+    def restore(self, request, pk=None):
+        """Restore an object to this revision's snapshot."""
+        revision = self.get_object()
+        ct = revision.content_type
+        model_class = ct.model_class()
+        try:
+            instance = model_class.objects.get(pk=revision.object_id, user=request.user)
+        except model_class.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+
+        # Apply snapshot fields
+        snapshot = revision.content_snapshot
+        for field, value in snapshot.items():
+            if hasattr(instance, field):
+                setattr(instance, field, value)
+        instance.save()
+
+        # Always create a revision for restore (bypass dedup)
+        ct = ContentType.objects.get_for_model(instance)
+        Revision.objects.create(
+            content_type=ct,
+            object_id=instance.pk,
+            content_snapshot=get_snapshot(instance),
+            message=f"Restored from revision {revision.pk}",
+            user=request.user,
+        )
+        return Response({"status": "ok", "restored_from": revision.pk})
 
 
 @api_view(["POST"])

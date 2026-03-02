@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from rest_framework.test import APIClient
 
 from agent_builder.models import (
@@ -9,6 +10,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Revision,
 )
 
 User = get_user_model()
@@ -618,3 +620,149 @@ class TestActiveVariantSelection:
             format="json",
         )
         assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestRevisionViewSet:
+    def test_list_revisions_for_chunk(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "v1"},
+            user=user,
+        )
+        response = client.get(
+            f"/agent-builder/api/revisions/?content_type={ct.pk}&object_id={chunk.pk}"
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    def test_list_requires_content_type_and_object_id(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/revisions/")
+        assert response.status_code == 400
+
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_rev", password="pass")
+        chunk = Chunk.objects.create(title="Test", content="v1", user=other_user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "v1"},
+            user=other_user,
+        )
+        response = client.get(
+            f"/agent-builder/api/revisions/?content_type={ct.pk}&object_id={chunk.pk}"
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == 0  # Not this user's revision
+
+    def test_retrieve_revision(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "v1"},
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/revisions/{revision.pk}/")
+        assert response.status_code == 200
+        assert response.json()["content_snapshot"]["content"] == "v1"
+
+
+@pytest.mark.django_db
+class TestRevisionDiff:
+    def test_diff_two_revisions(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        r1 = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "line 1\nline 2"},
+            user=user,
+        )
+        r2 = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "line 1\nline 2 modified"},
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/revisions/{r2.pk}/diff/?compare_to={r1.pk}")
+        assert response.status_code == 200
+        data = response.json()
+        assert "content" in data["diff"]
+
+    def test_diff_missing_compare_to(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        r1 = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "v1"},
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/revisions/{r1.pk}/diff/")
+        assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestRevisionRestore:
+    def test_restore_chunk_from_revision(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "v1", "in_library": False},
+            user=user,
+        )
+        # Change chunk content
+        chunk.content = "v2"
+        chunk.save()
+        # Restore from revision
+        response = client.post(f"/agent-builder/api/revisions/{revision.pk}/restore/")
+        assert response.status_code == 200
+        chunk.refresh_from_db()
+        assert chunk.content == "v1"
+
+    def test_restore_creates_new_revision(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Test", content="v1", user=user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"title": "Test", "content": "v1", "in_library": False},
+            user=user,
+        )
+        chunk.content = "v2"
+        chunk.save()
+        client.post(f"/agent-builder/api/revisions/{revision.pk}/restore/")
+        # Should have 2 revisions: original + restore
+        revisions = Revision.objects.filter(content_type=ct, object_id=chunk.pk)
+        assert revisions.count() == 2
+        assert "Restored" in revisions.first().message
+
+    def test_restore_other_users_revision_denied(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_restore", password="pass")
+        chunk = Chunk.objects.create(title="Test", content="v1", user=other_user)
+        ct = ContentType.objects.get_for_model(Chunk)
+        revision = Revision.objects.create(
+            content_type=ct,
+            object_id=chunk.pk,
+            content_snapshot={"content": "v1"},
+            user=other_user,
+        )
+        response = client.post(f"/agent-builder/api/revisions/{revision.pk}/restore/")
+        assert response.status_code == 404
