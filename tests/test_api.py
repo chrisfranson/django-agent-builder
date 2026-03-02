@@ -341,3 +341,62 @@ class TestAgentInstructionViewSet:
             format="json",
         )
         assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestChunkSplit:
+    def test_split_chunk(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(
+            title="Full Instructions",
+            content="Part one content.\n\nPart two content.",
+            in_library=True,
+            user=user,
+        )
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        response = client.post(
+            f"/agent-builder/api/chunks/{chunk.pk}/split/",
+            {"position": len("Part one content.")},
+            format="json",
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["chunks"]) == 2
+        assert data["chunks"][0]["content"] == "Part one content."
+        assert data["chunks"][1]["content"] == "Part two content."
+
+    def test_split_updates_agent_chunks(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(
+            title="Instructions", content="First half\n\nSecond half", user=user
+        )
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="claude", user=user
+        )
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=5)
+
+        response = client.post(
+            f"/agent-builder/api/chunks/{chunk.pk}/split/",
+            {"position": len("First half")},
+            format="json",
+        )
+        assert response.status_code == 200
+
+        agent_chunks = AgentChunk.objects.filter(agent=agent).order_by("position")
+        assert agent_chunks.count() == 2
+        assert agent_chunks[0].position == 5
+        assert agent_chunks[1].position == 6
+
+    def test_split_at_invalid_position(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="Short", content="Hi", user=user)
+        response = client.post(
+            f"/agent-builder/api/chunks/{chunk.pk}/split/",
+            {"position": 999},
+            format="json",
+        )
+        assert response.status_code == 400

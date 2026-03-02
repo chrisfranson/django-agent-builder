@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from django.db import transaction
+from django.db.models import F
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.decorators import permission_classes as perm_classes
@@ -125,6 +127,63 @@ class AgentInstructionViewSet(viewsets.ModelViewSet):
         if instruction.user != self.request.user:
             raise drf_serializers.ValidationError("Instruction must belong to the same user.")
         serializer.save(agent=agent)
+
+
+@api_view(["POST"])
+@perm_classes([IsAuthenticated])
+def split_chunk(request, pk):
+    """Split a chunk at the given character position into two new chunks."""
+    chunk = Chunk.objects.filter(pk=pk, user=request.user).first()
+    if not chunk:
+        return Response({"detail": "Not found."}, status=404)
+
+    position = request.data.get("position")
+    if position is None:
+        return Response({"detail": "position is required."}, status=400)
+
+    position = int(position)
+    content = chunk.content
+    if position <= 0 or position >= len(content):
+        return Response({"detail": "position out of range."}, status=400)
+
+    first_content = content[:position].strip()
+    second_content = content[position:].strip()
+
+    with transaction.atomic():
+        chunk1 = Chunk.objects.create(
+            title=chunk.title,
+            content=first_content,
+            in_library=chunk.in_library,
+            user=chunk.user,
+        )
+        chunk2 = Chunk.objects.create(
+            title="",
+            content=second_content,
+            in_library=False,
+            user=chunk.user,
+        )
+
+        agent_chunks = AgentChunk.objects.filter(chunk=chunk).select_related("agent")
+        for ac in agent_chunks:
+            original_position = ac.position
+            AgentChunk.objects.filter(agent=ac.agent, position__gt=original_position).update(
+                position=F("position") + 1
+            )
+            ac.chunk = chunk1
+            ac.save()
+            AgentChunk.objects.create(
+                agent=ac.agent,
+                chunk=chunk2,
+                position=original_position + 1,
+                is_enabled=ac.is_enabled,
+            )
+
+        chunk.delete()
+
+    return Response(
+        {"chunks": ChunkSerializer([chunk1, chunk2], many=True).data},
+        status=200,
+    )
 
 
 @api_view(["POST"])

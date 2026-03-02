@@ -12,6 +12,7 @@ from .api_views import (
     InstructionViewSet,
     apply_all,
     import_all,
+    split_chunk,
 )
 from .views import CustomSpectacularAPIView, IndexView
 
@@ -23,6 +24,7 @@ router.register(r"chunks", ChunkViewSet, basename="chunk")
 router.register(r"instructions", InstructionViewSet, basename="instruction")
 
 urlpatterns = [
+    path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),
     path("api/import-all/", import_all, name="import-all"),
     path("api/apply-all/", apply_all, name="apply-all"),
     path("api/", include(router.urls)),
