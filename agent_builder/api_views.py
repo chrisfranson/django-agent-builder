@@ -66,9 +66,14 @@ class ChunkViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self) -> QuerySet[Chunk]:
+        from django.db.models import Q
+
         qs = Chunk.objects.filter(user=self.request.user)
         if self.request.query_params.get("library") == "true":
             qs = qs.filter(in_library=True)
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(Q(title__icontains=search) | Q(content__icontains=search))
         return qs
 
     def perform_create(self, serializer) -> None:

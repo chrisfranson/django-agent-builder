@@ -400,3 +400,41 @@ class TestChunkSplit:
             format="json",
         )
         assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestChunkLibrary:
+    def test_search_chunks(self, api_client):
+        client, user = api_client
+        Chunk.objects.create(
+            title="Coding Standards", content="Follow PEP 8.", in_library=True, user=user
+        )
+        Chunk.objects.create(
+            title="Git Workflow", content="Use feature branches.", in_library=True, user=user
+        )
+        response = client.get("/agent-builder/api/chunks/?search=coding")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+        assert response.json()[0]["title"] == "Coding Standards"
+
+    def test_search_chunks_content(self, api_client):
+        client, user = api_client
+        Chunk.objects.create(
+            title="Standards", content="Always follow PEP 8 guidelines.", in_library=True, user=user
+        )
+        response = client.get("/agent-builder/api/chunks/?search=PEP")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    def test_promote_to_library(self, api_client):
+        client, user = api_client
+        chunk = Chunk.objects.create(title="My Chunk", content="content", user=user)
+        assert chunk.in_library is False
+        response = client.patch(
+            f"/agent-builder/api/chunks/{chunk.pk}/",
+            {"in_library": True},
+            format="json",
+        )
+        assert response.status_code == 200
+        chunk.refresh_from_db()
+        assert chunk.in_library is True
