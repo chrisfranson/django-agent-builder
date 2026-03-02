@@ -1,0 +1,159 @@
+import pytest
+from django.contrib.auth import get_user_model
+
+from agent_builder.filesystem import (
+    read_claude_agents,
+    read_coderoo_agents,
+    render_agent,
+    write_agent,
+)
+from agent_builder.models import Agent, AgentChunk, Chunk
+
+User = get_user_model()
+
+
+@pytest.mark.django_db
+class TestRenderAgent:
+    def test_render_single_chunk(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="test",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test\nmodel: sonnet",
+            user=user,
+        )
+        chunk = Chunk.objects.create(content="## Role\nYou are helpful.", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        result = render_agent(agent)
+        assert result == "---\nname: test\nmodel: sonnet\n---\n\n## Role\nYou are helpful."
+
+    def test_render_multiple_chunks_ordered(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="test",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test",
+            user=user,
+        )
+        chunk_a = Chunk.objects.create(content="First", user=user)
+        chunk_b = Chunk.objects.create(content="Second", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk_b, position=1)
+        AgentChunk.objects.create(agent=agent, chunk=chunk_a, position=0)
+
+        result = render_agent(agent)
+        assert "First\n\nSecond" in result
+
+    def test_render_skips_disabled_chunks(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="test",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test",
+            user=user,
+        )
+        chunk_a = Chunk.objects.create(content="Included", user=user)
+        chunk_b = Chunk.objects.create(content="Excluded", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk_a, position=0)
+        AgentChunk.objects.create(agent=agent, chunk=chunk_b, position=1, is_enabled=False)
+
+        result = render_agent(agent)
+        assert "Included" in result
+        assert "Excluded" not in result
+
+    def test_render_no_chunks(self):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="test",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test",
+            user=user,
+        )
+        result = render_agent(agent)
+        assert result == "---\nname: test\n---"
+
+
+@pytest.mark.django_db
+class TestWriteAgent:
+    def test_write_claude_agent(self, tmp_path):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="test-agent",
+            display_name="Test",
+            source="claude",
+            frontmatter="name: test-agent\nmodel: sonnet",
+            user=user,
+        )
+        chunk = Chunk.objects.create(content="## Instructions", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        agents_dir = tmp_path / ".claude" / "agents"
+        result_path = write_agent(agent, claude_agents_dir=agents_dir)
+
+        assert result_path.exists()
+        assert result_path.name == "test-agent.md"
+        content = result_path.read_text()
+        assert "---\nname: test-agent" in content
+        assert "## Instructions" in content
+
+    def test_write_coderoo_agent(self, tmp_path):
+        user = User.objects.create_user(username="testuser", password="testpass")
+        agent = Agent.objects.create(
+            name="my-agent",
+            display_name="My Agent",
+            source="coderoo",
+            frontmatter="name: my-agent\nmodel: sonnet",
+            user=user,
+        )
+        chunk = Chunk.objects.create(content="## Role", user=user)
+        AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+
+        agents_dir = tmp_path / ".config" / "coderoo" / "agents"
+        write_agent(agent, coderoo_agents_dir=agents_dir)
+
+        md_path = agents_dir / "my-agent" / "my-agent.md"
+        json5_path = agents_dir / "my-agent" / "my-agent.json5"
+        assert md_path.exists()
+        assert json5_path.exists()
+        assert "## Role" in md_path.read_text()
+
+
+class TestReadAgents:
+    def test_read_claude_agents(self, tmp_path):
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "scout.md").write_text(
+            "---\nname: scout\ndescription: Finds things\nmodel: sonnet\n---\n\n"
+            "## Role\nYou find things."
+        )
+
+        agents = read_claude_agents(agents_dir)
+        assert len(agents) == 1
+        assert agents[0]["name"] == "scout"
+        assert agents[0]["source"] == "claude"
+        assert agents[0]["frontmatter"] == "name: scout\ndescription: Finds things\nmodel: sonnet"
+        assert agents[0]["content"] == "## Role\nYou find things."
+
+    def test_read_coderoo_agents(self, tmp_path):
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "researcher"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "researcher.md").write_text(
+            "---\nname: researcher\ndescription: Researches\n---\n\n## Research"
+        )
+        (agent_dir / "researcher.json5").write_text('{\n  "reminder": [],\n  "docs.include": []\n}')
+
+        agents = read_coderoo_agents(agents_dir)
+        assert len(agents) == 1
+        assert agents[0]["name"] == "researcher"
+        assert agents[0]["source"] == "coderoo"
+        assert "config" in agents[0]
+
+    def test_read_empty_dir(self, tmp_path):
+        agents_dir = tmp_path / "nonexistent"
+        assert read_claude_agents(agents_dir) == []
+        assert read_coderoo_agents(agents_dir) == []
