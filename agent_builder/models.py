@@ -115,6 +115,9 @@ class AgentChunk(models.Model):
     def clean(self) -> None:
         if self.agent_id and self.chunk_id and self.agent.user_id != self.chunk.user_id:
             raise ValidationError("Agent and chunk must belong to the same user.")
+        if self.active_variant_id and self.chunk_id:
+            if self.active_variant.chunk_id != self.chunk_id:
+                raise ValidationError("Active variant must belong to the same chunk.")
 
     def __str__(self) -> str:
         return f"{self.agent.name} / {self.chunk} @ {self.position}"

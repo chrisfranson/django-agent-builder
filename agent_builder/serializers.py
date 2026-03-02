@@ -23,11 +23,35 @@ class AgentChunkSerializer(serializers.ModelSerializer):
     chunk_id = serializers.PrimaryKeyRelatedField(
         queryset=Chunk.objects.all(), source="chunk", write_only=True
     )
+    active_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ChunkVariant.objects.all(),
+        source="active_variant",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = AgentChunk
-        fields = ["id", "chunk", "chunk_id", "position", "is_enabled", "active_variant"]
+        fields = [
+            "id",
+            "chunk",
+            "chunk_id",
+            "position",
+            "is_enabled",
+            "active_variant",
+            "active_variant_id",
+        ]
         read_only_fields = ["active_variant"]
+
+    def validate(self, data):
+        chunk = data.get("chunk") or (self.instance.chunk if self.instance else None)
+        variant = data.get("active_variant")
+        if variant and chunk and variant.chunk_id != chunk.pk:
+            raise serializers.ValidationError(
+                {"active_variant_id": "Variant must belong to the same chunk."}
+            )
+        return data
 
 
 class InstructionSerializer(serializers.ModelSerializer):

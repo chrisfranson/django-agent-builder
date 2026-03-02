@@ -306,3 +306,30 @@ class TestAgentInstructionModel:
         ai = AgentInstruction(agent=agent, instruction=instruction)
         with pytest.raises(ValidationError):
             ai.clean()
+
+
+@pytest.mark.django_db
+class TestActiveVariantValidation:
+    def test_active_variant_must_belong_to_same_chunk(self, user):
+        chunk1 = Chunk.objects.create(title="Chunk 1", content="c1", user=user)
+        chunk2 = Chunk.objects.create(title="Chunk 2", content="c2", user=user)
+        variant_for_chunk2 = ChunkVariant.objects.create(
+            chunk=chunk2, label="gentle", content="content", position=0
+        )
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        ac = AgentChunk(agent=agent, chunk=chunk1, position=0, active_variant=variant_for_chunk2)
+        with pytest.raises(ValidationError):
+            ac.clean()
+
+    def test_active_variant_same_chunk_passes(self, user):
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="content", position=0
+        )
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        ac = AgentChunk(agent=agent, chunk=chunk, position=0, active_variant=variant)
+        ac.clean()  # Should not raise

@@ -559,3 +559,62 @@ class TestChunkVariantViewSet:
         response = client.get(f"/agent-builder/api/chunks/{chunk.pk}/variants/{variant.pk}/")
         assert response.status_code == 200
         assert response.json()["label"] == "gentle"
+
+
+@pytest.mark.django_db
+class TestActiveVariantSelection:
+    def test_set_active_variant(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="gentle", position=0
+        )
+        ac = AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
+        response = client.patch(
+            f"/agent-builder/api/agents/{agent.pk}/chunks/{ac.pk}/",
+            {"active_variant_id": variant.pk},
+            format="json",
+        )
+        assert response.status_code == 200
+        ac.refresh_from_db()
+        assert ac.active_variant == variant
+
+    def test_clear_active_variant(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        chunk = Chunk.objects.create(title="Test", content="content", user=user)
+        variant = ChunkVariant.objects.create(
+            chunk=chunk, label="gentle", content="gentle", position=0
+        )
+        ac = AgentChunk.objects.create(agent=agent, chunk=chunk, position=0, active_variant=variant)
+        response = client.patch(
+            f"/agent-builder/api/agents/{agent.pk}/chunks/{ac.pk}/",
+            {"active_variant_id": None},
+            format="json",
+        )
+        assert response.status_code == 200
+        ac.refresh_from_db()
+        assert ac.active_variant is None
+
+    def test_set_variant_wrong_chunk_rejected(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(
+            name="test-agent", display_name="Test", source="coderoo", user=user
+        )
+        chunk1 = Chunk.objects.create(title="Chunk 1", content="c1", user=user)
+        chunk2 = Chunk.objects.create(title="Chunk 2", content="c2", user=user)
+        variant_for_chunk2 = ChunkVariant.objects.create(
+            chunk=chunk2, label="gentle", content="content", position=0
+        )
+        ac = AgentChunk.objects.create(agent=agent, chunk=chunk1, position=0)
+        response = client.patch(
+            f"/agent-builder/api/agents/{agent.pk}/chunks/{ac.pk}/",
+            {"active_variant_id": variant_for_chunk2.pk},
+            format="json",
+        )
+        assert response.status_code == 400
