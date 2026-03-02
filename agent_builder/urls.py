@@ -11,6 +11,7 @@ from .api_views import (
     ChunkVariantViewSet,
     ChunkViewSet,
     InstructionViewSet,
+    ProfileViewSet,
     RevisionViewSet,
     apply_all,
     import_all,
@@ -24,6 +25,7 @@ router = DefaultRouter()
 router.register(r"agents", AgentViewSet, basename="agent")
 router.register(r"chunks", ChunkViewSet, basename="chunk")
 router.register(r"instructions", InstructionViewSet, basename="instruction")
+router.register(r"profiles", ProfileViewSet, basename="profile")
 router.register(r"revisions", RevisionViewSet, basename="revision")
 
 urlpatterns = [

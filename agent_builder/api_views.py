@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 from typing import TYPE_CHECKING
 
 from django.contrib.contenttypes.models import ContentType
@@ -23,7 +24,17 @@ from .filesystem import (
     write_agent,
     write_instruction,
 )
-from .models import Agent, AgentChunk, AgentInstruction, Chunk, ChunkVariant, Instruction, Revision
+from .models import (
+    Agent,
+    AgentChunk,
+    AgentInstruction,
+    Chunk,
+    ChunkVariant,
+    Instruction,
+    Profile,
+    Revision,
+)
+from .profiles import capture_snapshot, restore_snapshot
 from .revisions import create_revision, get_snapshot
 from .serializers import (
     AgentChunkSerializer,
@@ -33,6 +44,7 @@ from .serializers import (
     ChunkSerializer,
     ChunkVariantSerializer,
     InstructionSerializer,
+    ProfileSerializer,
     RevisionSerializer,
 )
 
@@ -244,6 +256,59 @@ class RevisionViewSet(viewsets.ReadOnlyModelViewSet):
             user=request.user,
         )
         return Response({"status": "ok", "restored_from": revision.pk})
+
+
+class ProfileViewSet(viewsets.ModelViewSet):
+    """CRUD for profiles with snapshot capture, apply, and diff."""
+
+    serializer_class = ProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self) -> QuerySet[Profile]:
+        return Profile.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer) -> None:
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def snapshot(self, request, pk=None):
+        """Capture current system state into this profile's snapshot."""
+        profile = self.get_object()
+        profile.snapshot = capture_snapshot(request.user)
+        profile.save()
+        return Response({"status": "ok"})
+
+    @action(detail=True, methods=["post"])
+    def apply(self, request, pk=None):
+        """Restore system state from this profile's snapshot."""
+        profile = self.get_object()
+        restore_snapshot(profile.snapshot, request.user)
+        return Response({"status": "ok", "profile": profile.name})
+
+    @action(detail=True, methods=["get"])
+    def diff(self, request, pk=None):
+        """Compare this profile's snapshot to another profile."""
+        profile = self.get_object()
+        compare_to_id = request.query_params.get("compare_to")
+        if not compare_to_id:
+            return Response({"detail": "compare_to query param required."}, status=400)
+        compare_to = get_object_or_404(self.get_queryset(), pk=compare_to_id)
+
+        diff_result = {}
+        all_keys = set(profile.snapshot.keys()) | set(compare_to.snapshot.keys())
+        for key in all_keys:
+            old_val = json.dumps(compare_to.snapshot.get(key, []), indent=2, sort_keys=True)
+            new_val = json.dumps(profile.snapshot.get(key, []), indent=2, sort_keys=True)
+            if old_val != new_val:
+                diff_result[key] = list(
+                    difflib.unified_diff(
+                        old_val.splitlines(keepends=True),
+                        new_val.splitlines(keepends=True),
+                        fromfile=f"profile {compare_to.pk}",
+                        tofile=f"profile {profile.pk}",
+                    )
+                )
+        return Response({"diff": diff_result})
 
 
 @api_view(["POST"])

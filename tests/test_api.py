@@ -10,6 +10,7 @@ from agent_builder.models import (
     Chunk,
     ChunkVariant,
     Instruction,
+    Profile,
     Revision,
 )
 
@@ -766,3 +767,138 @@ class TestRevisionRestore:
         )
         response = client.post(f"/agent-builder/api/revisions/{revision.pk}/restore/")
         assert response.status_code == 404
+
+
+class TestProfileViewSet:
+    @pytest.mark.django_db
+    def test_list_profiles(self, api_client):
+        client, user = api_client
+        Profile.objects.create(
+            name="config-1",
+            snapshot={"agents": []},
+            user=user,
+        )
+        response = client.get("/agent-builder/api/profiles/")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+
+    @pytest.mark.django_db
+    def test_create_profile(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/profiles/",
+            {
+                "name": "new-config",
+                "description": "Test",
+                "snapshot": {"agents": [], "chunks": [], "instructions": []},
+            },
+            format="json",
+        )
+        assert response.status_code == 201
+        assert Profile.objects.filter(user=user).count() == 1
+
+    @pytest.mark.django_db
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other_profile", password="pass")
+        Profile.objects.create(
+            name="other-config",
+            snapshot={},
+            user=other_user,
+        )
+        response = client.get("/agent-builder/api/profiles/")
+        assert response.json() == []
+
+    @pytest.mark.django_db
+    def test_delete_profile(self, api_client):
+        client, user = api_client
+        profile = Profile.objects.create(
+            name="config",
+            snapshot={},
+            user=user,
+        )
+        response = client.delete(f"/agent-builder/api/profiles/{profile.pk}/")
+        assert response.status_code == 204
+        assert Profile.objects.count() == 0
+
+
+class TestProfileSnapshot:
+    @pytest.mark.django_db
+    def test_snapshot_captures_current_state(self, api_client):
+        client, user = api_client
+        Agent.objects.create(name="test-agent", display_name="Test", source="coderoo", user=user)
+        profile = Profile.objects.create(
+            name="config",
+            snapshot={},
+            user=user,
+        )
+        response = client.post(f"/agent-builder/api/profiles/{profile.pk}/snapshot/")
+        assert response.status_code == 200
+        profile.refresh_from_db()
+        assert len(profile.snapshot["agents"]) == 1
+        assert profile.snapshot["agents"][0]["name"] == "test-agent"
+
+
+class TestProfileApply:
+    @pytest.mark.django_db
+    def test_apply_restores_state(self, api_client):
+        client, user = api_client
+        snapshot = {
+            "agents": [
+                {
+                    "name": "restored-agent",
+                    "display_name": "Restored",
+                    "source": "claude",
+                    "description": "",
+                    "model": "sonnet",
+                    "frontmatter": "",
+                    "is_active": True,
+                    "chunks": [],
+                    "instructions": [],
+                }
+            ],
+            "chunks": [],
+            "instructions": [],
+        }
+        profile = Profile.objects.create(
+            name="config",
+            snapshot=snapshot,
+            user=user,
+        )
+        response = client.post(f"/agent-builder/api/profiles/{profile.pk}/apply/")
+        assert response.status_code == 200
+        assert Agent.objects.filter(user=user, name="restored-agent").exists()
+
+
+class TestProfileDiff:
+    @pytest.mark.django_db
+    def test_diff_two_profiles(self, api_client):
+        client, user = api_client
+        p1 = Profile.objects.create(
+            name="v1",
+            snapshot={"agents": [{"name": "agent-1"}], "chunks": [], "instructions": []},
+            user=user,
+        )
+        p2 = Profile.objects.create(
+            name="v2",
+            snapshot={
+                "agents": [{"name": "agent-1"}, {"name": "agent-2"}],
+                "chunks": [],
+                "instructions": [],
+            },
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/profiles/{p2.pk}/diff/?compare_to={p1.pk}")
+        assert response.status_code == 200
+        assert "diff" in response.json()
+
+    @pytest.mark.django_db
+    def test_diff_missing_compare_to(self, api_client):
+        client, user = api_client
+        profile = Profile.objects.create(
+            name="config",
+            snapshot={},
+            user=user,
+        )
+        response = client.get(f"/agent-builder/api/profiles/{profile.pk}/diff/")
+        assert response.status_code == 400
