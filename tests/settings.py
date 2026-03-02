@@ -25,7 +25,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
 ]
 
-ROOT_URLCONF = "agent_builder.urls"
+ROOT_URLCONF = "tests.urls"
 
 DATABASES = {
     "default": {
@@ -41,6 +41,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_PAGINATION_CLASS": None,
 }
 
 USE_TZ = True

@@ -1,54 +1,67 @@
-"""
-API views for agent_builder with OAuth2 authentication and user scoping.
-
-All views require authentication and automatically scope data to the requesting user.
-"""
+"""API views for agent_builder with OAuth2 authentication and user scoping."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from rest_framework import viewsets
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
-from rest_framework.response import Response
 
-from .models import ExampleModel
-from .serializers import ExampleModelSerializer
+from .models import Agent, AgentChunk, Chunk
+from .serializers import AgentChunkSerializer, AgentListSerializer, AgentSerializer, ChunkSerializer
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
 
-class ExampleModelViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for ExampleModel with automatic user scoping.
+class AgentViewSet(viewsets.ModelViewSet):
+    """CRUD for agents with automatic user scoping."""
 
-    Only returns objects owned by the authenticated user.
-    Automatically assigns the current user when creating new objects.
-    """
-
-    serializer_class = ExampleModelSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self) -> QuerySet[ExampleModel]:
-        """Filter queryset to only include objects owned by the current user."""
-        return ExampleModel.objects.filter(user=self.request.user)
+    def get_serializer_class(self):
+        if self.action == "list":
+            return AgentListSerializer
+        return AgentSerializer
 
-    def perform_create(self, serializer: ExampleModelSerializer) -> None:
-        """Automatically assign the current user when creating objects."""
+    def get_queryset(self) -> QuerySet[Agent]:
+        qs = Agent.objects.filter(user=self.request.user)
+        source = self.request.query_params.get("source")
+        if source:
+            qs = qs.filter(source=source)
+        return qs
+
+    def perform_create(self, serializer) -> None:
         serializer.save(user=self.request.user)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def example_api_view(request: Request) -> Response:
-    """
-    Example function-based API view with authentication.
+class ChunkViewSet(viewsets.ModelViewSet):
+    """CRUD for chunks with optional library filtering."""
 
-    Returns user-scoped data for the authenticated user.
-    """
-    examples = ExampleModel.objects.filter(user=request.user)
-    serializer = ExampleModelSerializer(examples, many=True)
-    return Response({"count": examples.count(), "results": serializer.data})
+    serializer_class = ChunkSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self) -> QuerySet[Chunk]:
+        qs = Chunk.objects.filter(user=self.request.user)
+        if self.request.query_params.get("library") == "true":
+            qs = qs.filter(in_library=True)
+        return qs
+
+    def perform_create(self, serializer) -> None:
+        serializer.save(user=self.request.user)
+
+
+class AgentChunkViewSet(viewsets.ModelViewSet):
+    """Manage chunks attached to a specific agent."""
+
+    serializer_class = AgentChunkSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self) -> QuerySet[AgentChunk]:
+        return AgentChunk.objects.filter(
+            agent_id=self.kwargs["agent_pk"],
+            agent__user=self.request.user,
+        )
+
+    def perform_create(self, serializer) -> None:
+        serializer.save(agent_id=self.kwargs["agent_pk"])

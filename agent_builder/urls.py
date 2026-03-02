@@ -1,19 +1,28 @@
-"""
-URL configuration for agent_builder with OAuth2 and DRF support.
-"""
+"""URL configuration for agent_builder."""
 
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .api_views import ExampleModelViewSet, example_api_view
+from .api_views import AgentChunkViewSet, AgentViewSet, ChunkViewSet
 
-# Create a router and register viewsets
+app_name = "agent_builder"
+
 router = DefaultRouter()
-router.register(r"examples", ExampleModelViewSet, basename="example")
+router.register(r"agents", AgentViewSet, basename="agent")
+router.register(r"chunks", ChunkViewSet, basename="chunk")
 
 urlpatterns = [
-    # API endpoints via router
     path("api/", include(router.urls)),
-    # Custom API endpoints
-    path("api/custom-example/", example_api_view, name="custom-example"),
+    path(
+        "api/agents/<int:agent_pk>/chunks/",
+        AgentChunkViewSet.as_view({"get": "list", "post": "create"}),
+        name="agent-chunks-list",
+    ),
+    path(
+        "api/agents/<int:agent_pk>/chunks/<int:pk>/",
+        AgentChunkViewSet.as_view(
+            {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
+        ),
+        name="agent-chunks-detail",
+    ),
 ]

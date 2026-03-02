@@ -1,93 +1,121 @@
-"""
-Tests for agent_builder API views.
-"""
-
 import pytest
-from django.urls import reverse
-from rest_framework import status
+from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
 
-from agent_builder.models import ExampleModel
+from agent_builder.models import Agent, Chunk
+
+User = get_user_model()
+
+
+@pytest.fixture
+def api_client():
+    user = User.objects.create_user(username="testuser", password="testpass")
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return client, user
 
 
 @pytest.mark.django_db
-class TestExampleModelViewSet:
-    """Tests for ExampleModel ViewSet."""
+class TestAgentViewSet:
+    def test_list_agents_empty(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/agents/")
+        assert response.status_code == 200
+        assert response.json() == []
 
-    def test_list_requires_authentication(self, api_client):
-        """Test that listing examples requires authentication."""
-        url = reverse("example-list")
-        response = api_client.get(url)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
-
-    def test_list_examples(self, authenticated_client, user):
-        """Test listing examples for authenticated user."""
-        # Create some examples
-        ExampleModel.objects.create(user=user, name="Example 1")
-        ExampleModel.objects.create(user=user, name="Example 2")
-
-        url = reverse("example-list")
-        response = authenticated_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        assert len(response.data) == 2
-
-    def test_create_example(self, authenticated_client, user):
-        """Test creating an example via API."""
-        url = reverse("example-list")
-        data = {"name": "New Example", "description": "Created via API"}
-        response = authenticated_client.post(url, data)
-
-        assert response.status_code == status.HTTP_201_CREATED
-        assert response.data["name"] == "New Example"
-        assert response.data["user"] == user.id
-
-        # Verify it was created in the database
-        assert ExampleModel.objects.filter(name="New Example").exists()
-
-    def test_user_scoping(self, api_client, user):
-        """Test that users can only see their own examples."""
-        # Create another user
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        other_user = User.objects.create_user(
-            username="otheruser", email="other@example.com", password="otherpass123"
+    def test_create_agent(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/agents/",
+            {
+                "name": "my-agent",
+                "display_name": "My Agent",
+                "source": "claude",
+                "description": "Test agent",
+            },
         )
+        assert response.status_code == 201
+        assert response.json()["name"] == "my-agent"
+        assert response.json()["user"] == user.pk
+        assert Agent.objects.filter(user=user).count() == 1
 
-        # Create examples for both users
-        ExampleModel.objects.create(user=user, name="User 1 Example")
-        ExampleModel.objects.create(user=other_user, name="User 2 Example")
+    def test_retrieve_agent(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        response = client.get(f"/agent-builder/api/agents/{agent.pk}/")
+        assert response.status_code == 200
+        assert response.json()["name"] == "test"
+        assert "agent_chunks" in response.json()
 
-        # Authenticate as first user
-        api_client.force_authenticate(user=user)
-        url = reverse("example-list")
-        response = api_client.get(url)
+    def test_update_agent(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        response = client.patch(
+            f"/agent-builder/api/agents/{agent.pk}/",
+            {
+                "display_name": "Updated Name",
+            },
+        )
+        assert response.status_code == 200
+        agent.refresh_from_db()
+        assert agent.display_name == "Updated Name"
 
-        # Should only see own example
-        assert response.status_code == status.HTTP_200_OK
-        assert len(response.data) == 1
-        assert response.data[0]["name"] == "User 1 Example"
+    def test_delete_agent(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        response = client.delete(f"/agent-builder/api/agents/{agent.pk}/")
+        assert response.status_code == 204
+        assert Agent.objects.count() == 0
 
-    def test_update_example(self, authenticated_client, user):
-        """Test updating an example."""
-        example = ExampleModel.objects.create(user=user, name="Original Name")
+    def test_user_scoping(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="other", password="pass")
+        Agent.objects.create(name="mine", display_name="Mine", source="claude", user=user)
+        Agent.objects.create(name="theirs", display_name="Theirs", source="claude", user=other_user)
+        response = client.get("/agent-builder/api/agents/")
+        assert len(response.json()) == 1
+        assert response.json()[0]["name"] == "mine"
 
-        url = reverse("example-detail", kwargs={"pk": example.pk})
-        data = {"name": "Updated Name"}
-        response = authenticated_client.patch(url, data)
+    def test_filter_by_source(self, api_client):
+        client, user = api_client
+        Agent.objects.create(name="claude-a", display_name="C", source="claude", user=user)
+        Agent.objects.create(name="coderoo-a", display_name="R", source="coderoo", user=user)
+        response = client.get("/agent-builder/api/agents/?source=claude")
+        assert len(response.json()) == 1
+        assert response.json()[0]["source"] == "claude"
 
-        assert response.status_code == status.HTTP_200_OK
-        assert response.data["name"] == "Updated Name"
 
-        example.refresh_from_db()
-        assert example.name == "Updated Name"
+@pytest.mark.django_db
+class TestChunkViewSet:
+    def test_list_chunks(self, api_client):
+        client, user = api_client
+        Chunk.objects.create(title="Test", content="Content", user=user)
+        response = client.get("/agent-builder/api/chunks/")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
 
-    def test_delete_example(self, authenticated_client, user):
-        """Test deleting an example."""
-        example = ExampleModel.objects.create(user=user, name="To Delete")
+    def test_create_chunk(self, api_client):
+        client, user = api_client
+        response = client.post(
+            "/agent-builder/api/chunks/",
+            {
+                "title": "New Chunk",
+                "content": "## Instructions",
+                "in_library": True,
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["title"] == "New Chunk"
 
-        url = reverse("example-detail", kwargs={"pk": example.pk})
-        response = authenticated_client.delete(url)
+    def test_filter_library_chunks(self, api_client):
+        client, user = api_client
+        Chunk.objects.create(title="In Lib", content="A", in_library=True, user=user)
+        Chunk.objects.create(content="Not in lib", user=user)
+        response = client.get("/agent-builder/api/chunks/?library=true")
+        assert len(response.json()) == 1
+        assert response.json()[0]["title"] == "In Lib"
 
-        assert response.status_code == status.HTTP_204_NO_CONTENT
-        assert not ExampleModel.objects.filter(pk=example.pk).exists()
+    def test_unauthenticated_rejected(self):
+        client = APIClient()
+        response = client.get("/agent-builder/api/agents/")
+        assert response.status_code in [401, 403]
