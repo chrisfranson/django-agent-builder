@@ -637,6 +637,26 @@ def apply_all_preview(request):
     )
 
 
+@api_view(["POST"])
+@perm_classes([IsAuthenticated])
+def simulate(request):
+    """Simulate a session start and return the assembled context."""
+    from .simulate import simulate_session
+
+    agent_id = request.data.get("agent_id")
+    project_path = request.data.get("project_path", "")
+
+    if not agent_id:
+        return Response({"detail": "agent_id is required."}, status=400)
+
+    agent = Agent.objects.filter(pk=agent_id, user=request.user).first()
+    if not agent:
+        return Response({"detail": "Agent not found."}, status=404)
+
+    result = simulate_session(agent, project_path)
+    return Response(result)
+
+
 def _parse_frontmatter_dict(fm_text: str) -> dict:
     """Parse frontmatter text to dict."""
     result = {}

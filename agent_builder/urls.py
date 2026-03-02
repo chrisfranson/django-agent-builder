@@ -18,6 +18,7 @@ from .api_views import (
     apply_all,
     apply_all_preview,
     import_all,
+    simulate,
     split_chunk,
 )
 from .views import CustomSpectacularAPIView, IndexView
@@ -47,6 +48,7 @@ urlpatterns = [
         ),
         name="chunk-variants-detail",
     ),
+    path("api/simulate/", simulate, name="simulate"),
     path("api/import-all/", import_all, name="import-all"),
     path("api/apply-all/preview/", apply_all_preview, name="apply-all-preview"),
     path("api/apply-all/", apply_all, name="apply-all"),

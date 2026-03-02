@@ -556,6 +556,10 @@
                             <button class="btn btn-outline-info btn-sm d-none" id="applyOneBtn" onclick="applyOneAgent()" title="Write this agent to disk">
                                 <i class="bi bi-upload"></i> Apply
                             </button>
+                            <button class="btn btn-outline-info btn-sm d-none" id="simulateBtn"
+                                onclick="openSimulatePanel()" title="Simulate session context">
+                                <i class="bi bi-play-circle"></i> Simulate
+                            </button>
                             <button class="btn btn-outline-danger btn-sm d-none" id="deleteBtn" onclick="deleteAgent()">
                                 <i class="bi bi-trash"></i>
                             </button>
@@ -1169,6 +1173,7 @@
                 document.getElementById('saveBtn').classList.remove('d-none');
                 document.getElementById('applyOneBtn').classList.add('d-none');
                 document.getElementById('deleteBtn').classList.add('d-none');
+                document.getElementById('simulateBtn').classList.add('d-none');
                 document.getElementById('viewModeGroup').classList.remove('d-none');
                 document.getElementById('docModeBtn').classList.add('d-none');
 
@@ -1241,6 +1246,7 @@
                 document.getElementById('saveBtn').classList.remove('d-none');
                 document.getElementById('applyOneBtn').classList.remove('d-none');
                 document.getElementById('deleteBtn').classList.remove('d-none');
+                document.getElementById('simulateBtn').classList.remove('d-none');
                 document.getElementById('viewModeGroup').classList.remove('d-none');
                 document.getElementById('docModeBtn').classList.remove('d-none');
 
@@ -1281,6 +1287,7 @@
             document.getElementById('saveBtn').classList.add('d-none');
             document.getElementById('applyOneBtn').classList.add('d-none');
             document.getElementById('deleteBtn').classList.add('d-none');
+            document.getElementById('simulateBtn').classList.add('d-none');
             document.getElementById('viewModeGroup').classList.add('d-none');
             document.getElementById('docModeBtn').classList.add('d-none');
             document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
@@ -1710,16 +1717,12 @@
                 }
             });
 
-            // Restore original CodeMirror sizes
-            frontmatterCM.setSize(null, 120);
-            configCM.setSize(null, 150);
-            contentCM.setSize(null, 400);
-
-            // Refresh all
+            // Restore CSS-controlled heights and refresh only moved editors
+            sections.forEach(sec => {
+                sec.cm.setSize(null, null);
+            });
             setTimeout(() => {
-                frontmatterCM.refresh();
-                configCM.refresh();
-                contentCM.refresh();
+                sections.forEach(sec => sec.cm.refresh());
                 updateStats();
             }, 10);
 
@@ -2091,6 +2094,155 @@
                 btn.innerHTML = '<i class="bi bi-upload"></i> Apply All';
             }
         }
+        // --- Simulate Mode ---
+        function openSimulatePanel() {
+            if (!currentAgentId) {
+                showToast('Select an agent first', 'warning');
+                return;
+            }
+            const modal = new bootstrap.Modal(document.getElementById('simulateModal'));
+            // Reset state
+            document.getElementById('simulateResults').classList.add('d-none');
+            document.getElementById('simulateLoading').classList.add('d-none');
+            modal.show();
+        }
+
+        async function runSimulation() {
+            const projectPath = document.getElementById('simulateProjectPath').value.trim();
+            const resultsDiv = document.getElementById('simulateResults');
+            const loadingDiv = document.getElementById('simulateLoading');
+            const sectionsDiv = document.getElementById('simulateSections');
+
+            resultsDiv.classList.add('d-none');
+            loadingDiv.classList.remove('d-none');
+
+            try {
+                const resp = await apiFetch('/agent-builder/api/simulate/', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        agent_id: currentAgentId,
+                        project_path: projectPath,
+                    }),
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    showToast(err.detail || 'Simulation failed', 'danger');
+                    loadingDiv.classList.add('d-none');
+                    return;
+                }
+
+                const data = await resp.json();
+                renderSimulateResults(data, sectionsDiv);
+
+                // Show agent info
+                const agentInfo = document.getElementById('simulateAgentInfo');
+                agentInfo.innerHTML = `
+                    <div class="alert alert-info mb-0">
+                        <strong>${simEscapeHtml(data.agent.display_name)}</strong>
+                        <span class="badge bg-secondary ms-2">${simEscapeHtml(data.agent.source)}</span>
+                        <span class="badge bg-primary ms-2">${simEscapeHtml(data.agent.model)}</span>
+                        <span class="text-muted ms-2">${data.sections.length} context sections</span>
+                    </div>
+                `;
+
+                loadingDiv.classList.add('d-none');
+                resultsDiv.classList.remove('d-none');
+            } catch (e) {
+                showToast('Simulation error: ' + e.message, 'danger');
+                loadingDiv.classList.add('d-none');
+            }
+        }
+
+        function renderSimulateResults(data, container) {
+            container.innerHTML = '';
+
+            const typeColors = {
+                agent_description: 'primary',
+                config_file: 'success',
+                docs_include: 'info',
+                reminder: 'warning',
+                agent_config: 'secondary',
+            };
+
+            const typeIcons = {
+                agent_description: 'bi-robot',
+                config_file: 'bi-file-earmark-text',
+                docs_include: 'bi-book',
+                reminder: 'bi-bell',
+                agent_config: 'bi-gear',
+            };
+
+            data.sections.forEach((section, i) => {
+                const color = typeColors[section.type] || 'light';
+                const icon = typeIcons[section.type] || 'bi-file-text';
+                const collapseId = `simSection${i}`;
+
+                const card = document.createElement('div');
+                card.className = 'card mb-2';
+                card.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center py-2"
+                         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                        <span>
+                            <i class="bi ${icon} text-${color} me-2"></i>
+                            <strong>${simEscapeHtml(section.title)}</strong>
+                            ${section.path ? `<small class="text-muted ms-2">${simEscapeHtml(section.path)}</small>` : ''}
+                        </span>
+                        <span class="badge bg-${color}">${section.type.replace(/_/g, ' ')}</span>
+                    </div>
+                    <div class="collapse" id="${collapseId}">
+                        <div class="card-body p-0">
+                            <pre class="mb-0 p-3" style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:0.85rem;">${simEscapeHtml(section.content)}</pre>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function simEscapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
     </script>
+
+    <!-- Simulate Mode Modal -->
+    <div class="modal fade" id="simulateModal" tabindex="-1" aria-labelledby="simulateModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="simulateModalLabel">
+                        <i class="bi bi-play-circle"></i> Simulate: Session Context Preview
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="simulateProjectPath" class="form-label">
+                            Project Path (optional)
+                        </label>
+                        <input type="text" class="form-control" id="simulateProjectPath"
+                            placeholder="/storage/Projects/my-project">
+                        <div class="form-text">
+                            Leave empty to see context without project-specific scoping.
+                        </div>
+                    </div>
+                    <button class="btn btn-primary mb-3" onclick="runSimulation()">
+                        <i class="bi bi-play-fill"></i> Run Simulation
+                    </button>
+                    <div id="simulateResults" class="d-none">
+                        <div id="simulateAgentInfo" class="mb-3"></div>
+                        <div id="simulateSections"></div>
+                    </div>
+                    <div id="simulateLoading" class="d-none text-center py-4">
+                        <div class="spinner-border text-primary"></div>
+                        <p class="mt-2">Assembling session context...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
