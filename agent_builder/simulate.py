@@ -123,8 +123,11 @@ def _get_scoped_config_files(user, project_path: str) -> list[ConfigFile]:
     matching = []
     for cf in config_files:
         scope = cf.scope
-        # A config file applies if the project path starts with the scope
-        if normalized_project.startswith(scope) or scope.startswith("~"):
+        # A config file applies if:
+        # 1. The project path is within the config file's scope, OR
+        # 2. The config file is a global config (lives under ~/.claude/)
+        is_global = "/.claude/" in cf.path
+        if normalized_project.startswith(scope) or is_global:
             matching.append(cf)
 
     # Sort by scope length (broadest first = shortest path)
