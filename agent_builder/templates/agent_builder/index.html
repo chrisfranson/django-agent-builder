@@ -564,7 +564,7 @@
                                     <button class="btn btn-primary btn-sm flex-grow-1" onclick="openCreateProjectModal()">
                                         <i class="bi bi-plus-lg"></i> New Project
                                     </button>
-                                    <button class="btn btn-outline-secondary btn-sm" onclick="loadProjects()" title="Refresh">
+                                    <button class="btn btn-outline-secondary btn-sm" id="refreshProjectsBtn" onclick="refreshProjects()" title="Scan filesystem and refresh">
                                         <i class="bi bi-arrow-clockwise"></i>
                                     </button>
                                 </div>
@@ -585,7 +585,7 @@
                                            oninput="filterMemoryFiles()">
                                 </div>
                                 <div class="d-flex gap-2 mb-3">
-                                    <button class="btn btn-outline-secondary btn-sm" onclick="loadConfigFiles()" title="Refresh">
+                                    <button class="btn btn-outline-secondary btn-sm" id="refreshMemoryBtn" onclick="refreshMemoryFiles()" title="Scan filesystem and refresh">
                                         <i class="bi bi-arrow-clockwise"></i>
                                     </button>
                                 </div>
@@ -1905,6 +1905,38 @@
                 renderProjectList(allProjects);
             } catch (err) {
                 showToast('Failed to load projects: ' + err.message, 'error');
+            }
+        }
+
+        async function refreshProjects() {
+            const btn = document.getElementById('refreshProjectsBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner-border spinner-border-sm"></div>';
+            try {
+                await apiFetch('/agent-builder/api/import-all/', { method: 'POST', body: '{}' });
+                await loadProjects();
+                showToast('Projects refreshed', 'success');
+            } catch (err) {
+                showToast('Failed to refresh projects: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+            }
+        }
+
+        async function refreshMemoryFiles() {
+            const btn = document.getElementById('refreshMemoryBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner-border spinner-border-sm"></div>';
+            try {
+                await apiFetch('/agent-builder/api/import-all/', { method: 'POST', body: '{}' });
+                await loadConfigFiles();
+                showToast('Memory files refreshed', 'success');
+            } catch (err) {
+                showToast('Failed to refresh memory files: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
             }
         }
 
