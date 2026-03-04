@@ -38,7 +38,7 @@ def detect_import_status(
 
     if disk_mtime is None:
         # File deleted from disk
-        return SyncStatus.UNCHANGED
+        return SyncStatus.DELETED_ON_DISK
 
     # Use a small tolerance (1 second) for mtime comparison
     disk_changed = disk_mtime > stored_file_mtime

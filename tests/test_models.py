@@ -577,3 +577,134 @@ class TestConfigFileModel:
         )
         user.delete()
         assert ConfigFile.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestSoftDeleteBehavior:
+    """Tests for SoftDeleteModel infrastructure across Agent, Instruction, ConfigFile, Project."""
+
+    def test_queryset_delete_sets_flags(self, user):
+        """SoftDeleteQuerySet.delete() sets is_deleted=True and deleted_at."""
+        Agent.objects.create(name="a1", display_name="A1", source="claude", user=user)
+        Agent.objects.create(name="a2", display_name="A2", source="claude", user=user)
+        Agent.objects.filter(user=user).delete()
+        # Default manager excludes soft-deleted, so use all_objects
+        agents = Agent.all_objects.filter(user=user)
+        assert agents.count() == 2
+        for agent in agents:
+            assert agent.is_deleted is True
+            assert agent.deleted_at is not None
+
+    def test_queryset_hard_delete_removes_rows(self, user):
+        """SoftDeleteQuerySet.hard_delete() actually removes from the database."""
+        Agent.objects.create(name="gone", display_name="Gone", source="claude", user=user)
+        Agent.all_objects.filter(user=user).hard_delete()
+        assert Agent.all_objects.filter(user=user).count() == 0
+
+    def test_default_manager_excludes_soft_deleted(self, user):
+        """objects (default manager) excludes soft-deleted records."""
+        a = Agent.objects.create(name="visible", display_name="V", source="claude", user=user)
+        a.soft_delete()
+        assert Agent.objects.filter(user=user).count() == 0
+        assert Agent.all_objects.filter(user=user).count() == 1
+
+    def test_all_objects_includes_everything(self, user):
+        """all_objects manager returns both active and soft-deleted records."""
+        Agent.objects.create(name="active", display_name="Active", source="claude", user=user)
+        a2 = Agent.objects.create(
+            name="deleted", display_name="Deleted", source="claude", user=user
+        )
+        a2.soft_delete()
+        assert Agent.all_objects.filter(user=user).count() == 2
+        assert Agent.objects.filter(user=user).count() == 1
+
+    def test_soft_delete_instance_method(self, user):
+        """soft_delete() sets is_deleted and deleted_at on the instance."""
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        agent.soft_delete()
+        agent.refresh_from_db()
+        assert agent.is_deleted is True
+        assert agent.deleted_at is not None
+
+    def test_restore_instance_method(self, user):
+        """restore() clears is_deleted and deleted_at."""
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        agent.soft_delete()
+        agent.restore()
+        agent.refresh_from_db()
+        assert agent.is_deleted is False
+        assert agent.deleted_at is None
+        # Should be visible via default manager again
+        assert Agent.objects.filter(pk=agent.pk).exists()
+
+    def test_alive_and_dead_querysets(self, user):
+        """alive() and dead() filter correctly."""
+        Agent.objects.create(name="alive", display_name="Alive", source="claude", user=user)
+        a2 = Agent.objects.create(name="dead", display_name="Dead", source="claude", user=user)
+        a2.soft_delete()
+        assert Agent.all_objects.filter(user=user).alive().count() == 1
+        assert Agent.all_objects.filter(user=user).dead().count() == 1
+
+    def test_conditional_unique_allows_recreate_after_soft_delete(self, user):
+        """Soft-deleting a record allows creating a new one with the same unique fields."""
+        agent = Agent.objects.create(name="reuse", display_name="Reuse", source="claude", user=user)
+        agent.soft_delete()
+        # Should not raise IntegrityError
+        new_agent = Agent.objects.create(
+            name="reuse", display_name="Reuse V2", source="claude", user=user
+        )
+        assert new_agent.pk != agent.pk
+        assert Agent.objects.filter(user=user, name="reuse").count() == 1
+        assert Agent.all_objects.filter(user=user, name="reuse").count() == 2
+
+    def test_instruction_soft_delete(self, user):
+        """Instruction model supports soft delete."""
+        inst = Instruction.objects.create(name="test", display_name="Test", content="c", user=user)
+        inst.soft_delete()
+        assert Instruction.objects.filter(user=user).count() == 0
+        assert Instruction.all_objects.filter(user=user).count() == 1
+
+    def test_configfile_soft_delete(self, user):
+        """ConfigFile model supports soft delete."""
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md", path="/test/CLAUDE.md", content="", user=user
+        )
+        cf.soft_delete()
+        assert ConfigFile.objects.filter(user=user).count() == 0
+        assert ConfigFile.all_objects.filter(user=user).count() == 1
+
+    def test_project_soft_delete(self, user):
+        """Project model supports soft delete."""
+        proj = Project.objects.create(name="proj", path="/test/proj", user=user)
+        proj.soft_delete()
+        assert Project.objects.filter(user=user).count() == 0
+        assert Project.all_objects.filter(user=user).count() == 1
+
+    def test_project_conditional_unique_after_soft_delete(self, user):
+        """Project path uniqueness allows re-creation after soft delete."""
+        proj = Project.objects.create(name="proj", path="/test/proj", user=user)
+        proj.soft_delete()
+        new_proj = Project.objects.create(name="proj-v2", path="/test/proj", user=user)
+        assert new_proj.pk != proj.pk
+
+    def test_instruction_conditional_unique_after_soft_delete(self, user):
+        """Instruction name uniqueness allows re-creation after soft delete."""
+        inst = Instruction.objects.create(
+            name="reuse", display_name="Reuse", content="c", user=user
+        )
+        inst.soft_delete()
+        new_inst = Instruction.objects.create(
+            name="reuse", display_name="Reuse V2", content="c2", user=user
+        )
+        assert new_inst.pk != inst.pk
+
+    def test_configfile_conditional_unique_after_soft_delete(self, user):
+        """ConfigFile path uniqueness allows re-creation after soft delete."""
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md", path="/test/CLAUDE.md", content="v1", user=user
+        )
+        cf.soft_delete()
+        new_cf = ConfigFile.objects.create(
+            filename="CLAUDE.md", path="/test/CLAUDE.md", content="v2", user=user
+        )
+        assert new_cf.pk != cf.pk

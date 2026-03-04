@@ -7,9 +7,65 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 
-class Agent(models.Model):
+class SoftDeleteQuerySet(models.QuerySet):
+    """QuerySet that overrides delete() to soft-delete."""
+
+    def delete(self):
+        """Soft delete all records in the queryset."""
+        return self.update(is_deleted=True, deleted_at=timezone.now())
+
+    def hard_delete(self):
+        """Actually delete records from the database."""
+        return super().delete()
+
+    def alive(self):
+        return self.filter(is_deleted=False)
+
+    def dead(self):
+        return self.filter(is_deleted=True)
+
+
+class SoftDeleteManager(models.Manager):
+    """Default manager that excludes soft-deleted records."""
+
+    def get_queryset(self):
+        return SoftDeleteQuerySet(self.model, using=self._db).filter(is_deleted=False)
+
+
+class AllObjectsManager(models.Manager):
+    """Unfiltered manager for admin and special queries."""
+
+    def get_queryset(self):
+        return SoftDeleteQuerySet(self.model, using=self._db)
+
+
+class SoftDeleteModel(models.Model):
+    """Abstract base for models with soft delete support."""
+
+    is_deleted = models.BooleanField(default=False, help_text="Soft-deleted flag")
+    deleted_at = models.DateTimeField(null=True, blank=True, help_text="When soft-deleted")
+
+    objects = SoftDeleteManager()
+    all_objects = AllObjectsManager()
+
+    class Meta:
+        abstract = True
+
+    def soft_delete(self):
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["is_deleted", "deleted_at"])
+
+    def restore(self):
+        self.is_deleted = False
+        self.deleted_at = None
+        self.save(update_fields=["is_deleted", "deleted_at"])
+
+
+class Agent(SoftDeleteModel):
     """An AI agent configuration (Claude Code or Coderoo)."""
 
     SOURCE_CHOICES = [
@@ -57,10 +113,16 @@ class Agent(models.Model):
 
     class Meta:
         ordering = ["name"]
-        unique_together = [["user", "name"]]
         indexes = [
             models.Index(fields=["user", "source"]),
             models.Index(fields=["user", "name"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "name"],
+                condition=models.Q(is_deleted=False),
+                name="unique_active_agent_per_user",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -138,7 +200,7 @@ class AgentChunk(models.Model):
         return f"{self.agent.name} / {self.chunk} @ {self.position}"
 
 
-class Instruction(models.Model):
+class Instruction(SoftDeleteModel):
     """A reusable instruction block that can be attached to agents."""
 
     INJECTION_MODE_CHOICES = [
@@ -176,8 +238,14 @@ class Instruction(models.Model):
 
     class Meta:
         ordering = ["name"]
-        unique_together = [["user", "name"]]
         indexes = [models.Index(fields=["user", "name"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "name"],
+                condition=models.Q(is_deleted=False),
+                name="unique_active_instruction_per_user",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -243,7 +311,7 @@ class Profile(models.Model):
         return self.name
 
 
-class ConfigFile(models.Model):
+class ConfigFile(SoftDeleteModel):
     """A project-level config file tracked from the filesystem (CLAUDE.md, AGENTS.md)."""
 
     filename = models.CharField(max_length=255, help_text="Filename (e.g., CLAUDE.md)")
@@ -270,8 +338,14 @@ class ConfigFile(models.Model):
 
     class Meta:
         ordering = ["path"]
-        unique_together = [["user", "path"]]
         indexes = [models.Index(fields=["user", "path"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "path"],
+                condition=models.Q(is_deleted=False),
+                name="unique_active_configfile_per_user",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.path
@@ -284,7 +358,7 @@ class ConfigFile(models.Model):
         return str(Path(self.path).parent)
 
 
-class Project(models.Model):
+class Project(SoftDeleteModel):
     """A detected project directory (has .coderoo/ and/or Claude Code config)."""
 
     name = models.CharField(max_length=255, help_text="Project name (derived from directory)")
@@ -305,14 +379,60 @@ class Project(models.Model):
 
     class Meta:
         ordering = ["name"]
-        unique_together = [["user", "path"]]
         indexes = [
             models.Index(fields=["user", "path"]),
             models.Index(fields=["user", "name"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "path"],
+                condition=models.Q(is_deleted=False),
+                name="unique_active_project_per_user",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.path})"
+
+
+class UserOptions(models.Model):
+    """Per-user UI preferences persisted across sessions."""
+
+    TAB_CHOICES = [
+        ("agents", "Agents"),
+        ("projects", "Projects"),
+        ("memory", "Memory"),
+    ]
+    AGENT_SUB_TAB_CHOICES = [
+        ("coderoo", "Coderoo"),
+        ("claude", "Claude"),
+    ]
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="agent_builder_options",
+    )
+    active_tab = models.CharField(
+        max_length=20,
+        choices=TAB_CHOICES,
+        default="agents",
+        help_text="Last selected top-level sidebar tab",
+    )
+    agent_sub_tab = models.CharField(
+        max_length=20,
+        choices=AGENT_SUB_TAB_CHOICES,
+        default="coderoo",
+        help_text="Last selected agent sub-tab",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "user options"
+
+    def __str__(self):
+        return f"Options for {self.user}"
 
 
 class Revision(models.Model):

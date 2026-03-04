@@ -11,6 +11,7 @@ from .models import (
     Profile,
     Project,
     Revision,
+    UserOptions,
 )
 
 
@@ -27,13 +28,34 @@ class AgentInstructionInline(admin.TabularInline):
     fields = ["instruction", "injection_mode"]
 
 
+@admin.action(description="Restore selected items")
+def restore_selected(modeladmin, request, queryset):
+    queryset.update(is_deleted=False, deleted_at=None)
+
+
+class SoftDeleteAdminMixin:
+    """Mixin for admin classes of SoftDeleteModel subclasses."""
+
+    def get_queryset(self, request):
+        return self.model.all_objects.all()
+
+
 @admin.register(Agent)
-class AgentAdmin(admin.ModelAdmin):
-    list_display = ["name", "display_name", "source", "model", "is_active", "updated_at"]
-    list_filter = ["source", "model", "is_active"]
+class AgentAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
+    list_display = [
+        "name",
+        "display_name",
+        "source",
+        "model",
+        "is_active",
+        "is_deleted",
+        "updated_at",
+    ]
+    list_filter = ["source", "model", "is_active", "is_deleted"]
     search_fields = ["name", "display_name", "description"]
     readonly_fields = ["created_at", "updated_at"]
     inlines = [AgentChunkInline, AgentInstructionInline]
+    actions = [restore_selected]
     fieldsets = (
         ("Agent", {"fields": ("name", "display_name", "source", "model", "is_active", "user")}),
         ("Content", {"fields": ("description", "frontmatter")}),
@@ -58,11 +80,12 @@ class ChunkAdmin(admin.ModelAdmin):
 
 
 @admin.register(Instruction)
-class InstructionAdmin(admin.ModelAdmin):
-    list_display = ["name", "display_name", "injection_mode", "user", "updated_at"]
-    list_filter = ["injection_mode"]
+class InstructionAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
+    list_display = ["name", "display_name", "injection_mode", "user", "is_deleted", "updated_at"]
+    list_filter = ["injection_mode", "is_deleted"]
     search_fields = ["name", "display_name", "content"]
     readonly_fields = ["created_at", "updated_at"]
+    actions = [restore_selected]
 
 
 @admin.register(Profile)
@@ -81,15 +104,33 @@ class RevisionAdmin(admin.ModelAdmin):
 
 
 @admin.register(ConfigFile)
-class ConfigFileAdmin(admin.ModelAdmin):
-    list_display = ["filename", "path", "user", "updated_at"]
+class ConfigFileAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
+    list_display = ["filename", "path", "user", "is_deleted", "updated_at"]
+    list_filter = ["is_deleted"]
     search_fields = ["filename", "path"]
     readonly_fields = ["created_at", "updated_at"]
+    actions = [restore_selected]
 
 
 @admin.register(Project)
-class ProjectAdmin(admin.ModelAdmin):
-    list_display = ["name", "path", "has_coderoo", "has_claude_config", "user", "updated_at"]
-    list_filter = ["has_coderoo", "has_claude_config"]
+class ProjectAdmin(SoftDeleteAdminMixin, admin.ModelAdmin):
+    list_display = [
+        "name",
+        "path",
+        "has_coderoo",
+        "has_claude_config",
+        "user",
+        "is_deleted",
+        "updated_at",
+    ]
+    list_filter = ["has_coderoo", "has_claude_config", "is_deleted"]
     search_fields = ["name", "path"]
     readonly_fields = ["discovered_at", "created_at", "updated_at"]
+    actions = [restore_selected]
+
+
+@admin.register(UserOptions)
+class UserOptionsAdmin(admin.ModelAdmin):
+    list_display = ["user", "active_tab", "agent_sub_tab", "updated_at"]
+    list_filter = ["active_tab", "agent_sub_tab"]
+    readonly_fields = ["created_at", "updated_at"]

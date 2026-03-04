@@ -16,6 +16,7 @@ from agent_builder.models import (
     Profile,
     Project,
     Revision,
+    UserOptions,
 )
 
 User = get_user_model()
@@ -79,7 +80,20 @@ class TestAgentViewSet:
         agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
         response = client.delete(f"/agent-builder/api/agents/{agent.pk}/")
         assert response.status_code == 204
+        # Soft-deleted: not visible via default manager
         assert Agent.objects.count() == 0
+        # But still exists in the database
+        deleted = Agent.all_objects.get(pk=agent.pk)
+        assert deleted.is_deleted is True
+        assert deleted.deleted_at is not None
+
+    def test_deleted_agent_not_in_list(self, api_client):
+        client, user = api_client
+        agent = Agent.objects.create(name="test", display_name="Test", source="claude", user=user)
+        agent.soft_delete()
+        response = client.get("/agent-builder/api/agents/")
+        assert response.status_code == 200
+        assert len(response.json()) == 0
 
     def test_user_scoping(self, api_client):
         client, user = api_client
@@ -328,10 +342,18 @@ class TestApplyAllEndpoint:
         data = response.json()
         assert data["deleted_from_db"] == 3
 
-        # Verify objects were deleted for the requesting user
+        # Verify objects are soft-deleted (not visible via default manager)
         assert not Agent.objects.filter(user=user, name="doomed-agent").exists()
         assert not Instruction.objects.filter(user=user, name="doomed-instruction").exists()
         assert not ConfigFile.objects.filter(user=user, path="/tmp/doomed-config.md").exists()
+
+        # Verify objects still exist in database as soft-deleted
+        agent_sd = Agent.all_objects.get(user=user, name="doomed-agent")
+        assert agent_sd.is_deleted is True
+        inst_sd = Instruction.all_objects.get(user=user, name="doomed-instruction")
+        assert inst_sd.is_deleted is True
+        cf_sd = ConfigFile.all_objects.get(user=user, path="/tmp/doomed-config.md")
+        assert cf_sd.is_deleted is True
 
         # Verify the other user's agent was NOT deleted
         assert Agent.objects.filter(user=other_user, name="doomed-agent").exists()
@@ -1246,3 +1268,386 @@ class TestImportAllProjects:
         data = response.json()
         assert data["projects_skipped"] >= 1
         assert data["projects_imported"] == 0
+
+
+@pytest.mark.django_db
+class TestUserOptions:
+    def test_get_defaults_for_new_user(self, api_client):
+        client, user = api_client
+        response = client.get("/agent-builder/api/user-options/")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active_tab"] == "agents"
+        assert data["agent_sub_tab"] == "coderoo"
+        assert UserOptions.objects.filter(user=user).exists()
+
+    def test_patch_active_tab(self, api_client):
+        client, user = api_client
+        response = client.patch(
+            "/agent-builder/api/user-options/",
+            {"active_tab": "projects"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.json()["active_tab"] == "projects"
+        opts = UserOptions.objects.get(user=user)
+        assert opts.active_tab == "projects"
+
+    def test_patch_agent_sub_tab(self, api_client):
+        client, user = api_client
+        response = client.patch(
+            "/agent-builder/api/user-options/",
+            {"agent_sub_tab": "claude"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.json()["agent_sub_tab"] == "claude"
+
+    def test_patch_invalid_choice_returns_400(self, api_client):
+        client, user = api_client
+        response = client.patch(
+            "/agent-builder/api/user-options/",
+            {"active_tab": "invalid"},
+            format="json",
+        )
+        assert response.status_code == 400
+
+    def test_index_view_passes_tab_context(self):
+        from django.test import RequestFactory
+
+        from agent_builder.views import IndexView
+
+        user = User.objects.create_user(username="viewuser", password="testpass")
+        UserOptions.objects.create(user=user, active_tab="projects", agent_sub_tab="claude")
+        factory = RequestFactory()
+        request = factory.get("/agent-builder/")
+        request.user = user
+        view = IndexView()
+        view.request = request
+        view.kwargs = {}
+        context = view.get_context_data()
+        assert context["active_tab"] == "projects"
+        assert context["agent_sub_tab"] == "claude"
+
+    def test_index_view_creates_defaults_for_new_user(self):
+        from django.test import RequestFactory
+
+        from agent_builder.views import IndexView
+
+        user = User.objects.create_user(username="viewuser2", password="testpass")
+        factory = RequestFactory()
+        request = factory.get("/agent-builder/")
+        request.user = user
+        view = IndexView()
+        view.request = request
+        view.kwargs = {}
+        context = view.get_context_data()
+        assert context["active_tab"] == "agents"
+        assert context["agent_sub_tab"] == "coderoo"
+        assert UserOptions.objects.filter(user=user).exists()
+
+
+@pytest.mark.django_db
+class TestInitProjectWithClaude:
+    def test_init_claude_queues_task(self, api_client):
+        from unittest.mock import patch
+
+        client, user = api_client
+        project = Project.objects.create(name="test-proj", path="/tmp/test-proj", user=user)
+        with patch("agent_builder.tasks.create_project_with_claude") as mock_task:
+            mock_task.delay.return_value = None
+            response = client.post(f"/agent-builder/api/projects/{project.id}/init-claude/")
+        assert response.status_code == 200
+        assert response.json() == {"status": "queued"}
+        mock_task.delay.assert_called_once_with(project.pk, project.path)
+
+    def test_init_claude_wrong_user_returns_404(self, api_client):
+        client, user = api_client
+        other_user = User.objects.create_user(username="otheruser", password="testpass")
+        project = Project.objects.create(name="other-proj", path="/tmp/other-proj", user=other_user)
+        response = client.post(f"/agent-builder/api/projects/{project.id}/init-claude/")
+        assert response.status_code == 404
+
+
+@pytest.mark.django_db
+class TestViewSetSoftDeletes:
+    """Test that DELETE endpoints soft-delete and soft-deleted items are excluded from lists."""
+
+    def test_delete_instruction_soft_deletes(self, api_client):
+        client, user = api_client
+        inst = Instruction.objects.create(name="test", display_name="Test", content="c", user=user)
+        response = client.delete(f"/agent-builder/api/instructions/{inst.pk}/")
+        assert response.status_code == 204
+        assert Instruction.objects.filter(pk=inst.pk).count() == 0
+        deleted = Instruction.all_objects.get(pk=inst.pk)
+        assert deleted.is_deleted is True
+
+    def test_soft_deleted_instruction_not_in_list(self, api_client):
+        client, user = api_client
+        inst = Instruction.objects.create(name="test", display_name="Test", content="c", user=user)
+        inst.soft_delete()
+        response = client.get("/agent-builder/api/instructions/")
+        assert len(response.json()) == 0
+
+    def test_delete_config_file_soft_deletes(self, api_client):
+        client, user = api_client
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md", path="/del/CLAUDE.md", content="", user=user
+        )
+        response = client.delete(f"/agent-builder/api/config-files/{cf.pk}/")
+        assert response.status_code == 204
+        assert ConfigFile.objects.filter(pk=cf.pk).count() == 0
+        deleted = ConfigFile.all_objects.get(pk=cf.pk)
+        assert deleted.is_deleted is True
+
+    def test_soft_deleted_config_file_not_in_list(self, api_client):
+        client, user = api_client
+        cf = ConfigFile.objects.create(
+            filename="CLAUDE.md", path="/del/CLAUDE.md", content="", user=user
+        )
+        cf.soft_delete()
+        response = client.get("/agent-builder/api/config-files/")
+        assert len(response.json()) == 0
+
+    def test_delete_project_soft_deletes(self, api_client):
+        client, user = api_client
+        proj = Project.objects.create(name="test", path="/del/test", user=user)
+        response = client.delete(f"/agent-builder/api/projects/{proj.pk}/")
+        assert response.status_code == 204
+        assert Project.objects.filter(pk=proj.pk).count() == 0
+        deleted = Project.all_objects.get(pk=proj.pk)
+        assert deleted.is_deleted is True
+
+    def test_soft_deleted_project_not_in_list(self, api_client):
+        client, user = api_client
+        proj = Project.objects.create(name="test", path="/del/test", user=user)
+        proj.soft_delete()
+        response = client.get("/agent-builder/api/projects/")
+        assert len(response.json()) == 0
+
+
+@pytest.mark.django_db
+class TestApplyPreviewDeletedInDb:
+    """Test that apply-all preview includes soft-deleted items when files exist on disk."""
+
+    def test_preview_includes_soft_deleted_agent_when_file_exists(self, api_client, tmp_path):
+        client, user = api_client
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "ghost.md").write_text("# Ghost agent")
+
+        agent = Agent.objects.create(name="ghost", display_name="Ghost", source="claude", user=user)
+        agent.soft_delete()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.get("/agent-builder/api/apply-all/preview/")
+
+        assert response.status_code == 200
+        agents = response.json()["agents"]
+        deleted_in_db = [a for a in agents if a.get("deleted_in_db")]
+        assert len(deleted_in_db) == 1
+        assert deleted_in_db[0]["name"] == "ghost"
+
+    def test_preview_excludes_soft_deleted_agent_when_no_file(self, api_client, tmp_path):
+        client, user = api_client
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        # No file on disk for this agent
+
+        agent = Agent.objects.create(name="gone", display_name="Gone", source="claude", user=user)
+        agent.soft_delete()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.get("/agent-builder/api/apply-all/preview/")
+
+        assert response.status_code == 200
+        agents = response.json()["agents"]
+        assert len(agents) == 0
+
+    def test_apply_all_delete_from_disk(self, api_client, tmp_path):
+        client, user = api_client
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        target_file = agents_dir / "ghost.md"
+        target_file.write_text("# Ghost agent")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.post(
+                "/agent-builder/api/apply-all/",
+                {"delete_from_disk": [{"path": str(target_file)}]},
+                format="json",
+            )
+
+        assert response.status_code == 200
+        assert response.json()["deleted_from_disk"] == 1
+        assert not target_file.exists()
+
+    def test_apply_all_delete_from_disk_rejects_outside_paths(self, api_client, tmp_path):
+        client, user = api_client
+        # Create a file outside allowed directories
+        outside_file = tmp_path / "outside" / "secret.txt"
+        outside_file.parent.mkdir(parents=True)
+        outside_file.write_text("secret data")
+
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.post(
+                "/agent-builder/api/apply-all/",
+                {"delete_from_disk": [{"path": str(outside_file)}]},
+                format="json",
+            )
+
+        assert response.status_code == 200
+        assert response.json()["deleted_from_disk"] == 0
+        assert outside_file.exists()  # File should NOT have been deleted
+
+
+@pytest.mark.django_db
+class TestImportDiskDeletions:
+    """Test that import detects DB records whose disk files are missing."""
+
+    def _mock_import(
+        self,
+        client,
+        agents=None,
+        instructions=None,
+        config_files=None,
+        projects=None,
+        resolutions=None,
+    ):
+        """Helper to call import-all with mocked filesystem readers."""
+        body = {}
+        if resolutions:
+            body["resolutions"] = resolutions
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.api_views.read_claude_agents", lambda: agents or [])
+            mp.setattr("agent_builder.api_views.read_coderoo_agents", lambda: [])
+            mp.setattr("agent_builder.api_views.read_instructions", lambda: instructions or [])
+            mp.setattr("agent_builder.api_views.read_config_files", lambda: config_files or [])
+            mp.setattr("agent_builder.api_views.scan_projects", lambda: projects or [])
+            return client.post(
+                "/agent-builder/api/import-all/",
+                body,
+                format="json",
+            )
+
+    def test_import_detects_missing_disk_agent(self, api_client):
+        """Import returns disk_deletions for agents with last_synced_at but no disk file."""
+        client, user = api_client
+        from django.utils import timezone as tz
+
+        agent = Agent.objects.create(
+            name="orphan", display_name="Orphan", source="claude", user=user
+        )
+        Agent.objects.filter(pk=agent.pk).update(last_synced_at=tz.now())
+
+        response = self._mock_import(client)  # No agents on disk
+
+        assert response.status_code == 200
+        data = response.json()
+        deletions = data["disk_deletions"]
+        assert len(deletions) == 1
+        assert deletions[0]["type"] == "agent"
+        assert deletions[0]["name"] == "orphan"
+        assert deletions[0]["status"] == "deleted_on_disk"
+        # Agent should still exist (not auto-deleted)
+        assert Agent.objects.filter(pk=agent.pk).exists()
+
+    def test_import_with_soft_delete_resolution(self, api_client):
+        """Import with resolution='soft_delete' soft-deletes the record."""
+        client, user = api_client
+        from django.utils import timezone as tz
+
+        agent = Agent.objects.create(
+            name="orphan", display_name="Orphan", source="claude", user=user
+        )
+        Agent.objects.filter(pk=agent.pk).update(last_synced_at=tz.now())
+
+        response = self._mock_import(client, resolutions={"agent:orphan": "soft_delete"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["disk_deleted"] == 1
+        assert len(data["disk_deletions"]) == 0
+        # Agent should be soft-deleted
+        assert not Agent.objects.filter(pk=agent.pk).exists()
+        assert Agent.all_objects.filter(pk=agent.pk, is_deleted=True).exists()
+
+    def test_import_skips_never_synced_agents(self, api_client):
+        """Agents with no last_synced_at should not appear in disk_deletions."""
+        client, user = api_client
+        Agent.objects.create(name="new-agent", display_name="New", source="claude", user=user)
+        # last_synced_at is None by default
+
+        response = self._mock_import(client)
+
+        assert response.status_code == 200
+        assert len(response.json()["disk_deletions"]) == 0
+
+
+@pytest.mark.django_db
+class TestApplyAllSelectedPaths:
+    """Test that apply_all respects selected_paths filtering."""
+
+    def test_apply_only_selected_paths(self, api_client, tmp_path):
+        """Only items in selected_paths should be written to disk."""
+        client, user = api_client
+        Agent.objects.create(name="included", display_name="Included", source="claude", user=user)
+        Agent.objects.create(name="excluded", display_name="Excluded", source="claude", user=user)
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        included_path = str(agents_dir / "included.md")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.post(
+                "/agent-builder/api/apply-all/",
+                {"selected_paths": [included_path]},
+                format="json",
+            )
+
+        assert response.status_code == 200
+        results = response.json()["results"]
+        names = [r["name"] for r in results]
+        assert "included" in names
+        assert "excluded" not in names
+
+    def test_apply_without_selected_paths_writes_everything(self, api_client, tmp_path):
+        """When selected_paths is not sent, all items should be processed."""
+        client, user = api_client
+        Agent.objects.create(name="agent-a", display_name="A", source="claude", user=user)
+        Agent.objects.create(name="agent-b", display_name="B", source="claude", user=user)
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR", agents_dir)
+            mp.setattr("agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR", tmp_path / "empty")
+            mp.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", tmp_path / "empty2")
+            response = client.post(
+                "/agent-builder/api/apply-all/",
+                {},
+                format="json",
+            )
+
+        assert response.status_code == 200
+        results = response.json()["results"]
+        names = [r["name"] for r in results]
+        assert "agent-a" in names
+        assert "agent-b" in names

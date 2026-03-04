@@ -13,6 +13,7 @@ from .models import (
     Profile,
     Project,
     Revision,
+    UserOptions,
 )
 
 
@@ -174,6 +175,12 @@ class ConfigFileSerializer(serializers.ModelSerializer):
             "file_mtime",
             "last_synced_at",
         ]
+
+
+class UserOptionsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserOptions
+        fields = ["active_tab", "agent_sub_tab"]
 
 
 class ProjectSerializer(serializers.ModelSerializer):

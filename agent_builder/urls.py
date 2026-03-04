@@ -18,8 +18,10 @@ from .api_views import (
     apply_all,
     apply_all_preview,
     import_all,
+    init_project_with_claude,
     simulate,
     split_chunk,
+    user_options,
 )
 from .views import CustomSpectacularAPIView, IndexView
 
@@ -35,6 +37,10 @@ router.register(r"config-files", ConfigFileViewSet, basename="configfile")
 router.register(r"projects", ProjectViewSet, basename="project")
 
 urlpatterns = [
+    path("api/user-options/", user_options, name="user-options"),
+    path(
+        "api/projects/<int:pk>/init-claude/", init_project_with_claude, name="project-init-claude"
+    ),
     path("api/chunks/<int:pk>/split/", split_chunk, name="chunk-split"),
     path(
         "api/chunks/<int:chunk_pk>/variants/",

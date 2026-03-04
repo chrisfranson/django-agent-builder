@@ -9,6 +9,15 @@ from drf_spectacular.views import SpectacularAPIView
 class IndexView(LoginRequiredMixin, TemplateView):
     template_name = "agent_builder/index.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        from .models import UserOptions
+
+        opts, _ = UserOptions.objects.get_or_create(user=self.request.user)
+        context["active_tab"] = opts.active_tab
+        context["agent_sub_tab"] = opts.agent_sub_tab
+        return context
+
 
 class FilteredSchemaGenerator(SchemaGenerator):
     def get_schema(self, request=None, public=False):

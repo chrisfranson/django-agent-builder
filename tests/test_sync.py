@@ -80,7 +80,7 @@ class TestSyncStatusDetection:
         assert status == SyncStatus.UNCHANGED
 
     def test_import_deleted_from_disk(self):
-        """File deleted from disk should return UNCHANGED."""
+        """File deleted from disk should return DELETED_ON_DISK."""
         base = datetime(2026, 1, 1, tzinfo=timezone.utc)
         status = detect_import_status(
             disk_mtime=None,
@@ -88,7 +88,7 @@ class TestSyncStatusDetection:
             db_updated_at=base,
             last_synced_at=base,
         )
-        assert status == SyncStatus.UNCHANGED
+        assert status == SyncStatus.DELETED_ON_DISK
 
     def test_apply_new_item(self):
         """Never synced should return NEW_IN_DB."""

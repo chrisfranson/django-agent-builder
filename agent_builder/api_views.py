@@ -38,6 +38,7 @@ from .models import (
     Profile,
     Project,
     Revision,
+    UserOptions,
 )
 from .profiles import capture_snapshot, restore_snapshot
 from .revisions import create_revision, get_snapshot
@@ -54,6 +55,7 @@ from .serializers import (
     ProjectListSerializer,
     ProjectSerializer,
     RevisionSerializer,
+    UserOptionsSerializer,
 )
 
 if TYPE_CHECKING:
@@ -79,6 +81,9 @@ class AgentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         serializer.save(user=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.soft_delete()
 
     @action(detail=True, methods=["post"])
     def apply(self, request, pk=None):
@@ -170,6 +175,9 @@ class InstructionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.soft_delete()
 
     def perform_update(self, serializer) -> None:
         instance = serializer.save()
@@ -337,6 +345,9 @@ class ConfigFileViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def perform_destroy(self, instance):
+        instance.soft_delete()
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """CRUD for detected projects."""
@@ -360,6 +371,33 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.soft_delete()
+
+
+@api_view(["GET", "PATCH"])
+@perm_classes([IsAuthenticated])
+def user_options(request):
+    """GET or PATCH the authenticated user's UI preferences."""
+    opts, _ = UserOptions.objects.get_or_create(user=request.user)
+    if request.method == "PATCH":
+        serializer = UserOptionsSerializer(opts, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+    return Response(UserOptionsSerializer(opts).data)
+
+
+@api_view(["POST"])
+@perm_classes([IsAuthenticated])
+def init_project_with_claude(request, pk):
+    """Queue a Celery task to initialize a project with Claude Code /new-project."""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    from .tasks import create_project_with_claude
+
+    create_project_with_claude.delay(project.pk, project.path)
+    return Response({"status": "queued"})
 
 
 @api_view(["POST"])
@@ -434,8 +472,10 @@ def import_all(request):
     skipped = 0
     updated = 0
     conflicts = []
+    disk_agent_names = set()
 
     for agent_data in read_claude_agents() + read_coderoo_agents():
+        disk_agent_names.add(agent_data["name"])
         existing = Agent.objects.filter(user=request.user, name=agent_data["name"]).first()
 
         if existing is None:
@@ -499,8 +539,10 @@ def import_all(request):
     instructions_skipped = 0
     instructions_updated = 0
     instruction_conflicts = []
+    disk_instruction_names = set()
 
     for instr_data in read_instructions():
+        disk_instruction_names.add(instr_data["name"])
         existing = Instruction.objects.filter(user=request.user, name=instr_data["name"]).first()
 
         if existing is None:
@@ -574,7 +616,7 @@ def import_all(request):
                 cf.path = resolved
                 cf.save(update_fields=["path"])
             else:
-                cf.delete()  # duplicate of the resolved record
+                ConfigFile.all_objects.filter(pk=cf.pk).hard_delete()
 
     for proj in Project.objects.filter(user=request.user):
         resolved = str(_ImportPath(proj.path).resolve())
@@ -583,14 +625,16 @@ def import_all(request):
                 proj.path = resolved
                 proj.save(update_fields=["path"])
             else:
-                proj.delete()
+                Project.all_objects.filter(pk=proj.pk).hard_delete()
 
     config_files_imported = 0
     config_files_skipped = 0
     config_files_updated = 0
     config_file_conflicts = []
+    disk_config_paths = set()
 
     for cf_data in read_config_files():
+        disk_config_paths.add(cf_data["path"])
         existing = ConfigFile.objects.filter(user=request.user, path=cf_data["path"]).first()
 
         if existing is None:
@@ -686,6 +730,57 @@ def import_all(request):
 
     all_conflicts = conflicts + instruction_conflicts + config_file_conflicts
 
+    # Detect DB records whose files are missing from disk
+    disk_deletions = []
+    disk_deleted_count = 0
+
+    for agent in Agent.objects.filter(user=request.user):
+        if agent.name not in disk_agent_names and agent.last_synced_at is not None:
+            resolution = resolutions.get(f"agent:{agent.name}")
+            if resolution == "soft_delete":
+                agent.soft_delete()
+                disk_deleted_count += 1
+            else:
+                disk_deletions.append(
+                    {
+                        "type": "agent",
+                        "name": agent.name,
+                        "source": agent.source,
+                        "status": "deleted_on_disk",
+                    }
+                )
+
+    for inst in Instruction.objects.filter(user=request.user):
+        if inst.name not in disk_instruction_names and inst.last_synced_at is not None:
+            resolution = resolutions.get(f"instruction:{inst.name}")
+            if resolution == "soft_delete":
+                inst.soft_delete()
+                disk_deleted_count += 1
+            else:
+                disk_deletions.append(
+                    {
+                        "type": "instruction",
+                        "name": inst.name,
+                        "status": "deleted_on_disk",
+                    }
+                )
+
+    for cf in ConfigFile.objects.filter(user=request.user):
+        if cf.path not in disk_config_paths and cf.last_synced_at is not None:
+            resolution = resolutions.get(f"config_file:{cf.path}")
+            if resolution == "soft_delete":
+                cf.soft_delete()
+                disk_deleted_count += 1
+            else:
+                disk_deletions.append(
+                    {
+                        "type": "config_file",
+                        "name": cf.filename,
+                        "path": cf.path,
+                        "status": "deleted_on_disk",
+                    }
+                )
+
     return Response(
         {
             "status": "ok",
@@ -702,6 +797,8 @@ def import_all(request):
             "projects_imported": projects_imported,
             "projects_updated": projects_updated,
             "projects_skipped": projects_skipped,
+            "disk_deletions": disk_deletions,
+            "disk_deleted": disk_deleted_count,
         }
     )
 
@@ -724,6 +821,8 @@ def apply_all(request):
 
     now = tz.now()
     force_paths = set(request.data.get("force_paths", []))
+    raw_selected = request.data.get("selected_paths", None)
+    selected_paths = set(raw_selected) if raw_selected is not None else None
 
     # Handle delete-from-db requests
     delete_from_db = request.data.get("delete_from_db", [])
@@ -732,14 +831,20 @@ def apply_all(request):
         item_type = item.get("type")
         try:
             if item_type == "agent":
-                Agent.objects.filter(user=request.user, name=item["name"]).delete()
-                deleted_from_db_count += 1
+                agent = Agent.objects.filter(user=request.user, name=item["name"]).first()
+                if agent:
+                    agent.soft_delete()
+                    deleted_from_db_count += 1
             elif item_type == "instruction":
-                Instruction.objects.filter(user=request.user, name=item["name"]).delete()
-                deleted_from_db_count += 1
+                inst = Instruction.objects.filter(user=request.user, name=item["name"]).first()
+                if inst:
+                    inst.soft_delete()
+                    deleted_from_db_count += 1
             elif item_type == "config_file":
-                ConfigFile.objects.filter(user=request.user, path=item["path"]).delete()
-                deleted_from_db_count += 1
+                cf = ConfigFile.objects.filter(user=request.user, path=item["path"]).first()
+                if cf:
+                    cf.soft_delete()
+                    deleted_from_db_count += 1
         except Exception:
             pass  # Skip items that fail to delete
 
@@ -752,6 +857,10 @@ def apply_all(request):
             disk_path = DEFAULT_CODEROO_AGENTS_DIR / agent.name / f"{agent.name}.md"
         else:
             disk_path = None
+
+        # Skip items not in the user's selection (if selection provided)
+        if selected_paths is not None and disk_path and str(disk_path) not in selected_paths:
+            continue
 
         disk_mtime = _get_file_mtime(disk_path) if disk_path else None
         force_this = str(disk_path) in force_paths if disk_path else False
@@ -795,6 +904,10 @@ def apply_all(request):
     instruction_results = []
     for instruction in Instruction.objects.filter(user=request.user):
         disk_path = DEFAULT_INSTRUCTIONS_DIR / f"{instruction.name}.md"
+
+        if selected_paths is not None and str(disk_path) not in selected_paths:
+            continue
+
         disk_mtime = _get_file_mtime(disk_path)
         force_this = str(disk_path) in force_paths
 
@@ -843,6 +956,10 @@ def apply_all(request):
     config_file_results = []
     for cf in ConfigFile.objects.filter(user=request.user):
         disk_path = _Path(cf.path)
+
+        if selected_paths is not None and str(disk_path) not in selected_paths:
+            continue
+
         disk_mtime = _get_file_mtime(disk_path)
         force_this = str(disk_path) in force_paths
 
@@ -887,12 +1004,39 @@ def apply_all(request):
         except Exception as e:
             config_file_results.append({"name": cf.filename, "status": "error", "detail": str(e)})
 
+    # Handle delete-from-disk requests (soft-deleted items whose files remain)
+    delete_from_disk = request.data.get("delete_from_disk", [])
+    deleted_from_disk_count = 0
+    allowed_dirs = [
+        str(DEFAULT_CLAUDE_AGENTS_DIR),
+        str(DEFAULT_CODEROO_AGENTS_DIR),
+        str(DEFAULT_INSTRUCTIONS_DIR),
+    ]
+    # Also allow paths of user's config files (active or soft-deleted)
+    allowed_config_paths = set(
+        ConfigFile.all_objects.filter(user=request.user).values_list("path", flat=True)
+    )
+    for item in delete_from_disk:
+        try:
+            target = _Path(item["path"]).resolve()
+            target_str = str(target)
+            # Validate path is within allowed directories or is a known config file path
+            is_allowed = any(target_str.startswith(d) for d in allowed_dirs) or (
+                target_str in allowed_config_paths
+            )
+            if is_allowed and target.exists() and target.is_file():
+                target.unlink()
+                deleted_from_disk_count += 1
+        except Exception:
+            pass  # Skip items that fail to delete
+
     return Response(
         {
             "results": results,
             "instruction_results": instruction_results,
             "config_file_results": config_file_results,
             "deleted_from_db": deleted_from_db_count,
+            "deleted_from_disk": deleted_from_disk_count,
         }
     )
 
@@ -1033,6 +1177,60 @@ def apply_all_preview(request):
         if deleted_on_disk:
             item["deleted_on_disk"] = True
         config_file_list.append(item)
+
+    # Soft-deleted agents that still have files on disk
+    deleted_agents = Agent.all_objects.filter(user=request.user, is_deleted=True)
+    for agent in deleted_agents:
+        if agent.source == "claude":
+            path = DEFAULT_CLAUDE_AGENTS_DIR / f"{agent.name}.md"
+        elif agent.source == "coderoo":
+            path = DEFAULT_CODEROO_AGENTS_DIR / agent.name / f"{agent.name}.md"
+        else:
+            continue
+        if path.exists():
+            agent_list.append(
+                {
+                    "name": agent.name,
+                    "source": agent.source,
+                    "path": str(path),
+                    "label": agent.display_name or agent.name,
+                    "deleted_in_db": True,
+                    "has_changes": False,
+                    "has_conflict": False,
+                }
+            )
+
+    # Soft-deleted instructions that still have files on disk
+    deleted_instructions = Instruction.all_objects.filter(user=request.user, is_deleted=True)
+    for inst in deleted_instructions:
+        path = DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md"
+        if path.exists():
+            instruction_list.append(
+                {
+                    "name": inst.name,
+                    "path": str(path),
+                    "label": inst.display_name or inst.name,
+                    "deleted_in_db": True,
+                    "has_changes": False,
+                    "has_conflict": False,
+                }
+            )
+
+    # Soft-deleted config files that still exist on disk
+    deleted_config_files = ConfigFile.all_objects.filter(user=request.user, is_deleted=True)
+    for cf in deleted_config_files:
+        path = _Path(cf.path)
+        if path.exists():
+            config_file_list.append(
+                {
+                    "filename": cf.filename,
+                    "path": cf.path,
+                    "label": cf.filename,
+                    "deleted_in_db": True,
+                    "has_changes": False,
+                    "has_conflict": False,
+                }
+            )
 
     return Response(
         {
