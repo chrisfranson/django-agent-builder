@@ -552,6 +552,14 @@
                                 </div>
                             </div>
                             <div class="tab-pane fade {% if active_tab == 'projects' %}show active{% endif %}" id="projectsTab">
+                                <div class="input-group input-group-sm mb-2">
+                                    <span class="input-group-text bg-transparent border-end-0">
+                                        <i class="bi bi-search"></i>
+                                    </span>
+                                    <input type="text" class="form-control search-input border-start-0"
+                                           id="projectSearchInput" placeholder="Search projects..."
+                                           oninput="filterProjects()">
+                                </div>
                                 <div class="d-flex gap-2 mb-3">
                                     <button class="btn btn-primary btn-sm flex-grow-1" onclick="openCreateProjectModal()">
                                         <i class="bi bi-plus-lg"></i> New Project
@@ -568,6 +576,14 @@
                                 </div>
                             </div>
                             <div class="tab-pane fade {% if active_tab == 'memory' %}show active{% endif %}" id="memoryTab">
+                                <div class="input-group input-group-sm mb-2">
+                                    <span class="input-group-text bg-transparent border-end-0">
+                                        <i class="bi bi-search"></i>
+                                    </span>
+                                    <input type="text" class="form-control search-input border-start-0"
+                                           id="memorySearchInput" placeholder="Search memory files..."
+                                           oninput="filterMemoryFiles()">
+                                </div>
                                 <div class="d-flex gap-2 mb-3">
                                     <button class="btn btn-outline-secondary btn-sm" onclick="loadConfigFiles()" title="Refresh">
                                         <i class="bi bi-arrow-clockwise"></i>
@@ -615,14 +631,14 @@
                                 </button>
                             </div>
                             <button class="btn btn-success btn-sm d-none" id="saveBtn" onclick="saveAgent()">
-                                <i class="bi bi-check-lg"></i> Save
+                                Save
                             </button>
                             <button class="btn btn-outline-info btn-sm d-none" id="applyOneBtn" onclick="applyOneAgent()" title="Write this agent to disk">
-                                <i class="bi bi-upload"></i> Apply
+                                Apply
                             </button>
                             <button class="btn btn-outline-info btn-sm d-none" id="simulateBtn"
                                 onclick="openSimulatePanel()" title="Simulate session context">
-                                <i class="bi bi-play-circle"></i> Simulate
+                                Simulate
                             </button>
                             <button class="btn btn-outline-danger btn-sm d-none" id="deleteBtn" onclick="deleteAgent()">
                                 <i class="bi bi-trash"></i>
@@ -1357,6 +1373,24 @@
             renderAgentList('claudeAgentList', filteredClaude, 'claude');
             renderAgentList('coderooAgentList', filteredCoderoo, 'coderoo');
             renderConfigFileList(filteredConfig);
+        }
+
+        function filterProjects() {
+            const query = document.getElementById('projectSearchInput').value.toLowerCase().trim();
+            const filtered = allProjects.filter(p =>
+                p.name.toLowerCase().includes(query) ||
+                p.path.toLowerCase().includes(query)
+            );
+            renderProjectList(filtered);
+        }
+
+        function filterMemoryFiles() {
+            const query = document.getElementById('memorySearchInput').value.toLowerCase().trim();
+            const filtered = allConfigFiles.filter(cf =>
+                cf.filename.toLowerCase().includes(query) ||
+                cf.path.toLowerCase().includes(query)
+            );
+            renderConfigFileList(filtered);
         }
 
         function renderAgentList(containerId, agents, source) {
@@ -3388,12 +3422,9 @@
                 card.className = 'card mb-2';
                 card.innerHTML = `
                     <div class="card-header d-flex align-items-center py-2" style="gap:0.5rem;">
-                        <span class="d-flex align-items-center" style="flex:0 0 auto; min-width:0;">
-                            <button type="button" class="btn btn-sm btn-link p-0 me-2 text-secondary"
-                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
-                                title="Expand/Collapse">
-                                <i class="bi bi-chevron-right"></i>
-                            </button>
+                        <span class="d-flex align-items-center" style="flex:0 0 auto; min-width:0; cursor:pointer;"
+                            data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                            <i class="bi bi-chevron-right me-2 text-secondary"></i>
                             <i class="bi ${icon} text-${color} me-1"></i>
                             <strong class="text-nowrap">${simEscapeHtml(cleanTitle)}</strong>
                         </span>
