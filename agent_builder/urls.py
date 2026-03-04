@@ -19,6 +19,7 @@ from .api_views import (
     apply_all_preview,
     import_all,
     init_project_with_claude,
+    memory_subsections,
     simulate,
     split_chunk,
     user_options,
@@ -58,6 +59,7 @@ urlpatterns = [
     path("api/import-all/", import_all, name="import-all"),
     path("api/apply-all/preview/", apply_all_preview, name="apply-all-preview"),
     path("api/apply-all/", apply_all, name="apply-all"),
+    path("api/memory-subsections/", memory_subsections, name="memory-subsections"),
     path("api/", include(router.urls)),
     path(
         "api/agents/<int:agent_pk>/chunks/",

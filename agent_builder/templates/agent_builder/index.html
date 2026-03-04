@@ -584,15 +584,69 @@
                                            id="memorySearchInput" placeholder="Search memory files..."
                                            oninput="filterMemoryFiles()">
                                 </div>
-                                <div class="d-flex gap-2 mb-3">
-                                    <button class="btn btn-outline-secondary btn-sm" id="refreshMemoryBtn" onclick="refreshMemoryFiles()" title="Scan filesystem and refresh">
-                                        <i class="bi bi-arrow-clockwise"></i>
-                                    </button>
-                                </div>
-                                <div class="agent-list" id="memoryFileList">
-                                    <div class="text-center text-muted py-4">
-                                        <div class="spinner-border spinner-border-sm"></div>
-                                        <div class="mt-2">Loading...</div>
+                                <!-- Memory sub-tabs -->
+                                <ul class="nav nav-pills nav-fill mb-3" role="tablist">
+                                    <li class="nav-item">
+                                        <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#memoryConfigTab"
+                                                onclick="saveTabState('memory', 'config')">
+                                            AGENTS.md
+                                        </button>
+                                    </li>
+                                    <li class="nav-item">
+                                        <button class="nav-link" data-bs-toggle="pill" data-bs-target="#memoryCoderooTab"
+                                                onclick="saveTabState('memory', 'coderoo')">
+                                            Coderoo
+                                        </button>
+                                    </li>
+                                    <li class="nav-item">
+                                        <button class="nav-link" data-bs-toggle="pill" data-bs-target="#memoryClaudeTab"
+                                                onclick="saveTabState('memory', 'claude')">
+                                            Claude
+                                        </button>
+                                    </li>
+                                </ul>
+                                <div class="tab-content">
+                                    <div class="tab-pane fade show active" id="memoryConfigTab">
+                                        <div class="d-flex gap-2 mb-3">
+                                            <button class="btn btn-primary btn-sm flex-grow-1" onclick="openCreateConfigFileModal()">
+                                                <i class="bi bi-plus-lg"></i> New File
+                                            </button>
+                                            <button class="btn btn-outline-secondary btn-sm" id="refreshMemoryBtn" onclick="refreshMemoryFiles()" title="Scan filesystem and refresh">
+                                                <i class="bi bi-arrow-clockwise"></i>
+                                            </button>
+                                        </div>
+                                        <div class="agent-list" id="memoryFileList">
+                                            <div class="text-center text-muted py-4">
+                                                <div class="spinner-border spinner-border-sm"></div>
+                                                <div class="mt-2">Loading...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="tab-pane fade" id="memoryCoderooTab">
+                                        <div class="d-flex gap-2 mb-3">
+                                            <button class="btn btn-outline-secondary btn-sm ms-auto" id="refreshCoderooInstructionsBtn" onclick="refreshCoderooInstructions()" title="Refresh">
+                                                <i class="bi bi-arrow-clockwise"></i>
+                                            </button>
+                                        </div>
+                                        <div class="agent-list" id="coderooInstructionList">
+                                            <div class="text-center text-muted py-4">
+                                                <div class="spinner-border spinner-border-sm"></div>
+                                                <div class="mt-2">Loading...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="tab-pane fade" id="memoryClaudeTab">
+                                        <div class="d-flex gap-2 mb-3">
+                                            <button class="btn btn-outline-secondary btn-sm ms-auto" id="refreshClaudeSkillsBtn" onclick="refreshClaudeSkills()" title="Refresh">
+                                                <i class="bi bi-arrow-clockwise"></i>
+                                            </button>
+                                        </div>
+                                        <div class="agent-list" id="claudeSkillList">
+                                            <div class="text-center text-muted py-4">
+                                                <div class="spinner-border spinner-border-sm"></div>
+                                                <div class="mt-2">Loading...</div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1240,6 +1294,7 @@
         let allAgents = { claude: [], coderoo: [] };
         let allConfigFiles = [];
         let allProjects = [];
+        let allMemorySubsections = { coderoo_instructions: [], claude_skills: [], claude_commands: [] };
         let lastSimulationData = null;
         let pendingSimulateDeleteIndex = null;
         let lastSimulatePath = '{{ last_simulate_path|default:""|escapejs }}';
@@ -1256,6 +1311,7 @@
             loadAgents();
             loadConfigFiles();
             loadProjects();
+            loadMemorySubsections();
             loadTheme();
             setupKeyboardShortcuts();
 
@@ -1447,11 +1503,22 @@
 
         function filterMemoryFiles() {
             const query = document.getElementById('memorySearchInput').value.toLowerCase().trim();
-            const filtered = allConfigFiles.filter(cf =>
+            // Filter config files
+            const filteredCf = allConfigFiles.filter(cf =>
                 cf.filename.toLowerCase().includes(query) ||
                 cf.path.toLowerCase().includes(query)
             );
-            renderConfigFileList(filtered);
+            renderConfigFileList(filteredCf);
+            // Filter subsection lists
+            const filterItems = (items) => items.filter(i =>
+                i.name.toLowerCase().includes(query) ||
+                (i.path || '').toLowerCase().includes(query)
+            );
+            renderMemorySubsectionList('coderooInstructionList',
+                filterItems(allMemorySubsections.coderoo_instructions), 'Coderoo Instruction');
+            renderMemorySubsectionList('claudeSkillList',
+                filterItems([...allMemorySubsections.claude_skills, ...allMemorySubsections.claude_commands]),
+                'Claude Skill');
         }
 
         function renderAgentList(containerId, agents, source) {
@@ -1525,6 +1592,117 @@
             `).join('');
         }
 
+        async function loadMemorySubsections() {
+            try {
+                const res = await apiFetch('/agent-builder/api/memory-subsections/');
+                const data = await res.json();
+                allMemorySubsections = data;
+                renderMemorySubsectionList('coderooInstructionList', data.coderoo_instructions, 'Coderoo Instruction');
+                renderMemorySubsectionList('claudeSkillList',
+                    [...data.claude_skills, ...data.claude_commands], 'Claude Skill');
+            } catch (err) {
+                showToast('Failed to load memory subsections: ' + err.message, 'error');
+            }
+        }
+
+        function renderMemorySubsectionList(containerId, items, label) {
+            const container = document.getElementById(containerId);
+            if (items.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                        No ${label.toLowerCase()}s found
+                    </div>`;
+                return;
+            }
+            container.innerHTML = items.map(item => `
+                <div class="agent-item p-2 mb-1"
+                     role="button" tabindex="0"
+                     onclick="viewMemorySubsectionItem('${item.name.replace(/'/g, "\\'")}', '${(item.path || '').replace(/'/g, "\\'")}')">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-file-earmark-code text-muted flex-shrink-0"></i>
+                        <div class="text-truncate">
+                            <strong style="font-size: 0.85rem;">${item.name}</strong>
+                            ${item.path ? `<br><small class="text-muted" style="font-size: 0.7rem;">${item.path}</small>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function viewMemorySubsectionItem(name, path) {
+            // Find the item from cached data
+            const allItems = [
+                ...allMemorySubsections.coderoo_instructions,
+                ...allMemorySubsections.claude_skills,
+                ...allMemorySubsections.claude_commands,
+            ];
+            const item = allItems.find(i => i.name === name && (i.path || '') === path);
+            if (!item) return;
+
+            // Clear other selections
+            currentAgentId = null;
+            currentAgent = null;
+            currentSource = null;
+            currentConfigFileId = null;
+            currentProjectId = null;
+            clearUnsaved();
+
+            // Hide project editor, show content editor
+            document.getElementById('projectEditor').classList.add('d-none');
+            document.getElementById('projectFilesSection').classList.add('d-none');
+
+            // Update UI
+            document.getElementById('editorTitle').innerHTML = `
+                <span class="badge bg-secondary me-2">Memory</span>
+                ${item.name}
+            `;
+            document.getElementById('editorSubtitle').textContent = item.path || '';
+
+            // Hide agent-specific sections
+            document.getElementById('frontmatterContainer').parentElement.classList.add('d-none');
+
+            // Show editor in read-only mode
+            document.getElementById('emptyState').classList.add('d-none');
+            document.getElementById('editorContent').classList.remove('d-none');
+            document.getElementById('saveBtn').classList.add('d-none');
+            document.getElementById('applyOneBtn').classList.add('d-none');
+            document.getElementById('deleteBtn').classList.add('d-none');
+            document.getElementById('simulateBtn').classList.add('d-none');
+            document.getElementById('viewModeGroup').classList.add('d-none');
+            document.getElementById('docModeBtn').classList.add('d-none');
+
+            contentCM.setValue(item.content || '');
+            contentCM.setOption('readOnly', true);
+            contentCM.refresh();
+        }
+
+        async function refreshCoderooInstructions() {
+            const btn = document.getElementById('refreshCoderooInstructionsBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+            try {
+                await loadMemorySubsections();
+                showToast('Coderoo instructions refreshed', 'success');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+            }
+        }
+
+        async function refreshClaudeSkills() {
+            const btn = document.getElementById('refreshClaudeSkillsBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+            try {
+                await loadMemorySubsections();
+                showToast('Claude skills refreshed', 'success');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+            }
+        }
+
         async function selectConfigFile(id) {
             if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
                 return;
@@ -1567,6 +1745,7 @@
                 document.getElementById('docModeBtn').classList.add('d-none');
 
                 contentCM.setValue(cf.content || '');
+                contentCM.setOption('readOnly', false);
 
                 clearUnsaved();
                 updateStats();
@@ -1724,6 +1903,7 @@
                     .map(ac => ac.chunk.content)
                     .join('\n\n');
                 contentCM.setValue(agentContent);
+                contentCM.setOption('readOnly', false);
 
                 // Config section (Coderoo only)
                 const configSection = document.getElementById('configSection');

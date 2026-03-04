@@ -180,7 +180,8 @@ class TestWriteInstruction:
         )
         path, mtime = write_instruction(instruction, instructions_dir=tmp_path)
         assert path.exists()
-        assert path.name == "coding-standards.md"
+        assert path.name == "SKILL.md"
+        assert path.parent.name == "coding-standards"
         assert mtime is not None
         content = path.read_text()
         assert "Coding Standards" in content
@@ -189,20 +190,24 @@ class TestWriteInstruction:
 
 class TestReadInstructions:
     def test_read_instructions(self, tmp_path):
-        (tmp_path / "coding-standards.md").write_text("## Coding Standards\n\nFollow PEP 8.")
-        (tmp_path / "git-workflow.md").write_text("## Git Workflow\n\nUse branches.")
-        instructions = read_instructions(instructions_dir=tmp_path)
+        d1 = tmp_path / "coding-standards"
+        d1.mkdir()
+        (d1 / "SKILL.md").write_text("## Coding Standards\n\nFollow PEP 8.")
+        d2 = tmp_path / "git-workflow"
+        d2.mkdir()
+        (d2 / "SKILL.md").write_text("## Git Workflow\n\nUse branches.")
+        instructions = read_instructions(instructions_dirs=[tmp_path])
         assert len(instructions) == 2
         names = [i["name"] for i in instructions]
         assert "coding-standards" in names
         assert "git-workflow" in names
 
     def test_read_instructions_empty_dir(self, tmp_path):
-        instructions = read_instructions(instructions_dir=tmp_path)
+        instructions = read_instructions(instructions_dirs=[tmp_path])
         assert instructions == []
 
     def test_read_instructions_nonexistent_dir(self):
-        instructions = read_instructions(instructions_dir=Path("/nonexistent"))
+        instructions = read_instructions(instructions_dirs=[Path("/nonexistent")])
         assert instructions == []
 
 

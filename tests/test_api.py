@@ -552,7 +552,9 @@ class TestInstructionImportApply:
         client, user = api_client
         instructions_dir = tmp_path / "instructions"
         instructions_dir.mkdir()
-        (instructions_dir / "coding-standards.md").write_text("Follow PEP 8.")
+        skill_dir = instructions_dir / "coding-standards"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("Follow PEP 8.")
 
         monkeypatch.setattr("agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR", instructions_dir)
         monkeypatch.setattr(
@@ -587,7 +589,7 @@ class TestInstructionImportApply:
 
         response = client.post("/agent-builder/api/apply-all/")
         assert response.status_code == 200
-        assert (tmp_path / "coding-standards.md").exists()
+        assert (tmp_path / "coding-standards" / "SKILL.md").exists()
 
 
 @pytest.mark.django_db

@@ -19,6 +19,8 @@ from rest_framework.response import Response
 
 from .filesystem import (
     read_claude_agents,
+    read_claude_commands,
+    read_claude_skills,
     read_coderoo_agents,
     read_config_files,
     read_instructions,
@@ -981,7 +983,7 @@ def apply_all(request):
 
     instruction_results = []
     for instruction in Instruction.objects.filter(user=request.user):
-        disk_path = DEFAULT_INSTRUCTIONS_DIR / f"{instruction.name}.md"
+        disk_path = DEFAULT_INSTRUCTIONS_DIR / instruction.name / "SKILL.md"
 
         if selected_paths is not None and str(disk_path) not in selected_paths:
             continue
@@ -1205,7 +1207,7 @@ def apply_all_preview(request):
     instructions = Instruction.objects.filter(user=request.user)
     instruction_list = []
     for inst in instructions:
-        path = DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md"
+        path = DEFAULT_INSTRUCTIONS_DIR / inst.name / "SKILL.md"
         db_content = inst.content
         disk_content = _read_disk(path)
         disk_mtime = _get_file_mtime(path)
@@ -1297,7 +1299,7 @@ def apply_all_preview(request):
     # Soft-deleted instructions that still have files on disk
     deleted_instructions = Instruction.all_objects.filter(user=request.user, is_deleted=True)
     for inst in deleted_instructions:
-        path = DEFAULT_INSTRUCTIONS_DIR / f"{inst.name}.md"
+        path = DEFAULT_INSTRUCTIONS_DIR / inst.name / "SKILL.md"
         if path.exists():
             instruction_list.append(
                 {
@@ -1450,3 +1452,16 @@ def _import_agent(user, agent_data: dict) -> Agent:
         chunk = Chunk.objects.create(content=agent_data["content"], user=user)
         AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
     return agent
+
+
+@api_view(["GET"])
+@perm_classes([IsAuthenticated])
+def memory_subsections(request):
+    """Return memory sub-section data: Coderoo instructions, Claude skills/commands."""
+    return Response(
+        {
+            "coderoo_instructions": read_instructions(),
+            "claude_skills": read_claude_skills(),
+            "claude_commands": read_claude_commands(),
+        }
+    )

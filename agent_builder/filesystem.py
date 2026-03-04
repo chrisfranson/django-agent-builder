@@ -34,12 +34,17 @@ DEFAULT_SCAN_ROOTS = [
 ]
 DEFAULT_EXTRA_PATHS = [
     (Path.home() / ".claude" / "CLAUDE.md").resolve(),
+    (Path.home() / "CLAUDE.md").resolve(),
+    (Path.home() / "AGENTS.md").resolve(),
 ]
 
 # Default paths
 DEFAULT_CLAUDE_AGENTS_DIR = Path.home() / ".claude" / "agents"
 DEFAULT_CODEROO_AGENTS_DIR = Path.home() / ".config" / "coderoo" / "agents"
 DEFAULT_INSTRUCTIONS_DIR = Path.home() / ".config" / "coderoo" / "instructions"
+DEFAULT_INSTRUCTIONS_MODULES_DIR = Path.home() / ".config" / "coderoo" / "instructions-modules"
+DEFAULT_CLAUDE_SKILLS_DIR = Path.home() / ".claude" / "skills"
+DEFAULT_CLAUDE_COMMANDS_DIR = Path.home() / ".claude" / "commands"
 
 
 def parse_frontmatter(text: str) -> tuple[str, str]:
@@ -173,17 +178,86 @@ def read_coderoo_agents(agents_dir: Path | None = None) -> list[dict]:
 def write_instruction(
     instruction, instructions_dir: Path | None = None
 ) -> tuple[Path, datetime | None]:
-    """Write an instruction to the Coderoo instructions directory."""
+    """Write an instruction to the Coderoo instructions directory.
+
+    Each instruction is a directory containing SKILL.md.
+    """
     target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / f"{instruction.name}.md"
+    skill_dir = target_dir / instruction.name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    target_path = skill_dir / "SKILL.md"
     target_path.write_text(normalize_trailing_newline(instruction.content))
     return target_path, _get_file_mtime(target_path)
 
 
-def read_instructions(instructions_dir: Path | None = None) -> list[dict]:
-    """Read all instruction files from the Coderoo instructions directory."""
-    target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
+def read_instructions(
+    instructions_dirs: list[Path] | None = None,
+) -> list[dict]:
+    """Read all instruction files from Coderoo instructions directories.
+
+    Each instruction is a directory containing SKILL.md.
+    Scans both instructions/ and instructions-modules/ by default.
+    """
+    dirs = instructions_dirs or [DEFAULT_INSTRUCTIONS_DIR, DEFAULT_INSTRUCTIONS_MODULES_DIR]
+    results = []
+    seen_names: set[str] = set()
+    for target_dir in dirs:
+        if not target_dir.exists():
+            continue
+        for skill_dir in sorted(target_dir.iterdir()):
+            if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+                continue
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
+                continue
+            if skill_dir.name in seen_names:
+                continue
+            try:
+                content = skill_file.read_text()
+                results.append(
+                    {
+                        "name": skill_dir.name,
+                        "content": content,
+                        "mtime": _get_file_mtime(skill_file),
+                        "path": str(skill_file),
+                    }
+                )
+                seen_names.add(skill_dir.name)
+            except Exception:
+                continue
+    return results
+
+
+def read_claude_skills(skills_dir: Path | None = None) -> list[dict]:
+    """Read all Claude Code skills from ~/.claude/skills/*/SKILL.md."""
+    target_dir = skills_dir or DEFAULT_CLAUDE_SKILLS_DIR
+    if not target_dir.exists():
+        return []
+    results = []
+    for skill_dir in sorted(target_dir.iterdir()):
+        if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            continue
+        try:
+            content = skill_file.read_text()
+            results.append(
+                {
+                    "name": skill_dir.name,
+                    "content": content,
+                    "mtime": _get_file_mtime(skill_file),
+                    "path": str(skill_file),
+                }
+            )
+        except Exception:
+            continue
+    return results
+
+
+def read_claude_commands(commands_dir: Path | None = None) -> list[dict]:
+    """Read all Claude Code slash commands from ~/.claude/commands/*.md."""
+    target_dir = commands_dir or DEFAULT_CLAUDE_COMMANDS_DIR
     if not target_dir.exists():
         return []
     results = []
@@ -191,10 +265,32 @@ def read_instructions(instructions_dir: Path | None = None) -> list[dict]:
         try:
             content = md_file.read_text()
             results.append(
-                {"name": md_file.stem, "content": content, "mtime": _get_file_mtime(md_file)}
+                {
+                    "name": md_file.stem,
+                    "content": content,
+                    "mtime": _get_file_mtime(md_file),
+                    "path": str(md_file),
+                }
             )
         except Exception:
             continue
+    # Also scan subdirectories for flat .md files (e.g., commands/new/*.md)
+    for sub_dir in sorted(target_dir.iterdir()):
+        if not sub_dir.is_dir() or sub_dir.name.startswith("."):
+            continue
+        for md_file in sorted(sub_dir.glob("*.md")):
+            try:
+                content = md_file.read_text()
+                results.append(
+                    {
+                        "name": f"{sub_dir.name}/{md_file.stem}",
+                        "content": content,
+                        "mtime": _get_file_mtime(md_file),
+                        "path": str(md_file),
+                    }
+                )
+            except Exception:
+                continue
     return results
 
 
