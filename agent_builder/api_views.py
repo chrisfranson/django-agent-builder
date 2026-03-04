@@ -410,22 +410,25 @@ class ProjectViewSet(viewsets.ModelViewSet):
         files = []
         resolved_project_dir = project_dir.resolve()
 
-        coderoo_config = project_dir / ".coderoo" / "coderoo.config.json5"
-        if coderoo_config.is_file():
-            try:
-                resolved = coderoo_config.resolve()
-                # Skip symlinks that escape the project directory
-                if str(resolved).startswith(str(resolved_project_dir) + "/"):
-                    files.append(
-                        {
-                            "filename": "coderoo.config.json5",
-                            "path": str(resolved),
-                            "content": coderoo_config.read_text(),
-                            "type": "coderoo_config",
-                        }
-                    )
-            except Exception:
-                pass
+        coderoo_config_paths = [
+            project_dir / ".coderoo" / "config.json5",
+            project_dir / "coderoo.config.json5",
+        ]
+        for coderoo_config in coderoo_config_paths:
+            if coderoo_config.is_file():
+                try:
+                    resolved = coderoo_config.resolve()
+                    if str(resolved).startswith(str(resolved_project_dir) + "/"):
+                        files.append(
+                            {
+                                "filename": coderoo_config.name,
+                                "path": str(resolved),
+                                "content": coderoo_config.read_text(),
+                                "type": "coderoo_config",
+                            }
+                        )
+                except Exception:
+                    pass
 
         for name in ("CLAUDE.md", "AGENTS.md"):
             filepath = project_dir / name
