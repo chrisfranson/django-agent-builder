@@ -940,6 +940,68 @@
         </div>
     </div>
 
+    <!-- Disk Deletions Modal -->
+    <div class="modal fade" id="diskDeletionsModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-trash text-warning"></i> Files Deleted from Disk
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">
+                        The following items exist in the database but their files have been
+                        deleted from disk. You can clean up the DB records (soft delete) or
+                        dismiss to keep them.
+                    </p>
+                    <div id="diskDeletionsList"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        Dismiss
+                    </button>
+                    <button type="button" class="btn btn-warning" id="diskDeletionsCleanBtn"
+                            onclick="cleanUpDiskDeletions()">
+                        <i class="bi bi-trash"></i> Clean up DB Records
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Config File Modal -->
+    <div class="modal fade" id="deleteConfigFileModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-trash text-danger"></i> Delete Memory File
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Delete <strong id="deleteConfigFileName"></strong>?</p>
+                    <p class="text-muted small">
+                        Choose whether to also delete the file from the filesystem.
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-warning" onclick="deleteConfigFile(false)">
+                        <i class="bi bi-database-x"></i> DB Only
+                    </button>
+                    <button type="button" class="btn btn-danger" onclick="deleteConfigFile(true)">
+                        <i class="bi bi-trash"></i> DB + Filesystem
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Keyboard shortcuts modal -->
     <div class="modal fade" id="shortcutsModal" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
@@ -1380,7 +1442,7 @@
                 document.getElementById('editorContent').classList.remove('d-none');
                 document.getElementById('saveBtn').classList.remove('d-none');
                 document.getElementById('applyOneBtn').classList.add('d-none');
-                document.getElementById('deleteBtn').classList.add('d-none');
+                document.getElementById('deleteBtn').classList.remove('d-none');
                 document.getElementById('simulateBtn').classList.add('d-none');
                 document.getElementById('viewModeGroup').classList.remove('d-none');
                 document.getElementById('docModeBtn').classList.add('d-none');
@@ -1398,6 +1460,39 @@
                 renderConfigFileList(allConfigFiles);
             } catch (err) {
                 showToast('Failed to load config file: ' + err.message, 'error');
+            }
+        }
+
+        function openDeleteConfigFileModal() {
+            const cf = allConfigFiles.find(f => f.id === currentConfigFileId);
+            if (!cf) return;
+            document.getElementById('deleteConfigFileName').textContent = cf.path;
+            new bootstrap.Modal(document.getElementById('deleteConfigFileModal')).show();
+        }
+
+        async function deleteConfigFile(alsoDeleteFromDisk) {
+            if (!currentConfigFileId) return;
+            const cf = allConfigFiles.find(f => f.id === currentConfigFileId);
+            try {
+                const res = await apiFetch(`/agent-builder/api/config-files/${currentConfigFileId}/`, {
+                    method: 'DELETE'
+                });
+                if (!res.ok) throw new Error('Delete failed');
+
+                if (alsoDeleteFromDisk && cf) {
+                    await apiFetch('/agent-builder/api/config-files/delete-file/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: cf.path })
+                    });
+                }
+
+                bootstrap.Modal.getInstance(document.getElementById('deleteConfigFileModal')).hide();
+                showToast(`Deleted ${cf ? cf.filename : 'config file'}${alsoDeleteFromDisk ? ' (and file)' : ''}`, 'success');
+                deselectAgent();
+                await loadConfigFiles();
+            } catch (err) {
+                showToast('Failed to delete: ' + err.message, 'error');
             }
         }
 
@@ -1684,6 +1779,10 @@
         }
 
         async function deleteAgent() {
+            if (currentConfigFileId) {
+                openDeleteConfigFileModal();
+                return;
+            }
             if (!currentAgentId || !currentSource) return;
 
             if (!confirm(`Delete "${currentAgent}"?`)) return;
@@ -2303,29 +2402,50 @@
 
         function showDiskDeletionsAlert(deletions) {
             pendingDiskDeletions = deletions;
-            const names = deletions.map(d => {
-                const type = d.type === 'config_file' ? 'Config' : d.type.charAt(0).toUpperCase() + d.type.slice(1);
-                const name = d.type === 'config_file' ? (d.path || '').replace(/^\/home\/[^/]+/, '~') : d.name;
-                return `${type}: ${name}`;
-            }).join(', ');
-            const count = deletions.length;
-            showToast(
-                `${count} item${count !== 1 ? 's' : ''} deleted from disk: ${names}. ` +
-                '<a href="#" onclick="cleanUpDiskDeletions(); return false;" class="alert-link">Clean up DB records</a>',
-                'warning',
-                10000
-            );
+            const listEl = document.getElementById('diskDeletionsList');
+            let html = '';
+
+            deletions.forEach(d => {
+                const typeLabel = d.type === 'config_file'
+                    ? 'Config' : d.type.charAt(0).toUpperCase() + d.type.slice(1);
+                const displayName = d.type === 'config_file'
+                    ? (d.path || '').replace(/^\/home\/[^/]+/, '~') : d.name;
+                const sourceBadge = d.source
+                    ? ` <span class="badge bg-secondary">${d.source}</span>` : '';
+
+                html += `
+                <div class="list-group-item d-flex align-items-center gap-2 py-2">
+                    <span class="badge bg-warning text-dark">${typeLabel}</span>
+                    <span class="small">${displayName}</span>
+                    ${sourceBadge}
+                </div>`;
+            });
+
+            listEl.innerHTML = html;
+            const modal = new bootstrap.Modal(document.getElementById('diskDeletionsModal'));
+            modal.show();
         }
 
         async function cleanUpDiskDeletions() {
             if (pendingDiskDeletions.length === 0) return;
+
+            const btn = document.getElementById('diskDeletionsCleanBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Cleaning up...';
+
             const resolutions = {};
             pendingDiskDeletions.forEach(d => {
                 const key = d.type === 'config_file' ? `config_file:${d.path}` : `${d.type}:${d.name}`;
                 resolutions[key] = 'soft_delete';
             });
             pendingDiskDeletions = [];
+
+            bootstrap.Modal.getInstance(document.getElementById('diskDeletionsModal')).hide();
             await importFromDisk(resolutions);
+
+            // Reset button state
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-trash"></i> Clean up DB Records';
         }
         // Expose to onclick
         window.cleanUpDiskDeletions = cleanUpDiskDeletions;

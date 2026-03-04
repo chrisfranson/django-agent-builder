@@ -348,6 +348,27 @@ class ConfigFileViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.soft_delete()
 
+    @action(detail=False, methods=["post"], url_path="delete-file")
+    def delete_file(self, request):
+        """Delete a config file from the filesystem."""
+        from pathlib import Path as _Path
+
+        path = request.data.get("path")
+        if not path:
+            return Response({"detail": "path required"}, status=400)
+
+        allowed_paths = set(
+            ConfigFile.all_objects.filter(user=request.user).values_list("path", flat=True)
+        )
+        target = _Path(path).resolve()
+        if str(target) not in allowed_paths:
+            return Response({"detail": "Not authorized to delete this file"}, status=403)
+
+        if target.exists() and target.is_file():
+            target.unlink()
+            return Response({"status": "ok", "deleted": str(target)})
+        return Response({"status": "ok", "detail": "File not found on disk"})
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """CRUD for detected projects."""
