@@ -408,18 +408,22 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Project directory not found"}, status=404)
 
         files = []
+        resolved_project_dir = project_dir.resolve()
 
         coderoo_config = project_dir / ".coderoo" / "coderoo.config.json5"
         if coderoo_config.is_file():
             try:
-                files.append(
-                    {
-                        "filename": "coderoo.config.json5",
-                        "path": str(coderoo_config),
-                        "content": coderoo_config.read_text(),
-                        "type": "coderoo_config",
-                    }
-                )
+                resolved = coderoo_config.resolve()
+                # Skip symlinks that escape the project directory
+                if str(resolved).startswith(str(resolved_project_dir) + "/"):
+                    files.append(
+                        {
+                            "filename": "coderoo.config.json5",
+                            "path": str(resolved),
+                            "content": coderoo_config.read_text(),
+                            "type": "coderoo_config",
+                        }
+                    )
             except Exception:
                 pass
 
@@ -427,12 +431,15 @@ class ProjectViewSet(viewsets.ModelViewSet):
             filepath = project_dir / name
             if filepath.is_file():
                 try:
-                    resolved = str(filepath.resolve())
-                    cf = ConfigFile.objects.filter(user=request.user, path=resolved).first()
+                    resolved = filepath.resolve()
+                    # Skip symlinks that escape the project directory
+                    if not str(resolved).startswith(str(resolved_project_dir) + "/"):
+                        continue
+                    cf = ConfigFile.objects.filter(user=request.user, path=str(resolved)).first()
                     files.append(
                         {
                             "filename": name,
-                            "path": resolved,
+                            "path": str(resolved),
                             "content": filepath.read_text(),
                             "type": "memory_file",
                             "config_file_id": cf.id if cf else None,

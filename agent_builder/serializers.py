@@ -199,6 +199,14 @@ class ProjectSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["user", "discovered_at", "created_at", "updated_at"]
 
+    def get_fields(self):
+        fields = super().get_fields()
+        # Prevent path/name modification on update (writable on create only)
+        if self.instance is not None:
+            fields["path"].read_only = True
+            fields["name"].read_only = True
+        return fields
+
 
 class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
