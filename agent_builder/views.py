@@ -16,6 +16,7 @@ class IndexView(LoginRequiredMixin, TemplateView):
         opts, _ = UserOptions.objects.get_or_create(user=self.request.user)
         context["active_tab"] = opts.active_tab
         context["agent_sub_tab"] = opts.agent_sub_tab
+        context["last_simulate_path"] = opts.last_simulate_path
         return context
 
 

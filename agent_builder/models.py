@@ -425,6 +425,12 @@ class UserOptions(models.Model):
         default="coderoo",
         help_text="Last selected agent sub-tab",
     )
+    last_simulate_path = models.CharField(
+        max_length=1024,
+        blank=True,
+        default="",
+        help_text="Last used project path in simulate modal",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

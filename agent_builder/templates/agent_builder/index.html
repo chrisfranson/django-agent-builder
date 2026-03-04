@@ -1149,6 +1149,7 @@
         let allProjects = [];
         let lastSimulationData = null;
         let pendingSimulateDeleteIndex = null;
+        let lastSimulatePath = '{{ last_simulate_path|default:""|escapejs }}';
         let viewMode = 'edit';
         let currentCreateSource = null;
         let createPollInterval = null;
@@ -3011,7 +3012,11 @@
             // Reset state
             document.getElementById('simulateResults').classList.add('d-none');
             document.getElementById('simulateLoading').classList.add('d-none');
-            // Populate project path datalist
+            // Pre-fill last used path and populate datalist
+            const pathInput = document.getElementById('simulateProjectPath');
+            if (!pathInput.value && lastSimulatePath) {
+                pathInput.value = lastSimulatePath;
+            }
             const datalist = document.getElementById('projectPathOptions');
             datalist.innerHTML = allProjects.map(p =>
                 `<option value="${simEscapeHtml(p.path)}" label="${simEscapeHtml(p.name)}">`
@@ -3048,6 +3053,13 @@
                 const normalized = normalizeSimulatePayload(data);
                 lastSimulationData = normalized;
                 renderSimulateResults(normalized, sectionsDiv);
+
+                // Persist last used path
+                lastSimulatePath = projectPath;
+                apiFetch('/agent-builder/api/user-options/', {
+                    method: 'PATCH',
+                    body: JSON.stringify({ last_simulate_path: projectPath }),
+                });
 
                 // Show agent info
                 const agentInfo = document.getElementById('simulateAgentInfo');
@@ -3258,29 +3270,42 @@
                     ? section.content
                     : JSON.stringify(section.content ?? '', null, 2);
 
+                // Strip known prefixes from title
+                const cleanTitle = section.title
+                    .replace(/^MD File:\s*/, '')
+                    .replace(/^Doc:\s*/, '')
+                    .replace(/^Task Doc:\s*/, '')
+                    .replace(/^Raw:\s*/, '');
+
                 const card = document.createElement('div');
                 card.className = 'card mb-2';
                 card.innerHTML = `
-                    <div class="card-header d-flex justify-content-between align-items-center py-2">
-                        <span>
+                    <div class="card-header d-flex align-items-center py-2" style="gap:0.5rem;">
+                        <span class="d-flex align-items-center" style="flex:0 0 auto; min-width:0;">
                             <button type="button" class="btn btn-sm btn-link p-0 me-2 text-secondary"
                                 data-bs-toggle="collapse" data-bs-target="#${collapseId}"
                                 title="Expand/Collapse">
                                 <i class="bi bi-chevron-right"></i>
                             </button>
-                            <i class="bi ${icon} text-${color} me-2"></i>
-                            <strong>${simEscapeHtml(section.title)}</strong>
-                            ${section.path ? `<small class="text-muted ms-2">${simEscapeHtml(section.path)}</small>` : ''}
+                            <i class="bi ${icon} text-${color} me-1"></i>
+                            <strong class="text-nowrap">${simEscapeHtml(cleanTitle)}</strong>
                         </span>
-                        <div class="btn-group btn-group-sm">
+                        ${section.path ? `<button type="button"
+                            class="btn btn-sm btn-link text-muted text-decoration-none p-0 text-truncate"
+                            style="flex:1 1 auto; min-width:0; text-align:left; font-size:0.82rem;"
+                            title="Click to copy path"
+                            onclick="event.stopPropagation(); copySimulatePath(${i});">
+                            ${simEscapeHtml(section.path)}
+                        </button>` : '<span style="flex:1 1 auto;"></span>'}
+                        <div class="btn-group btn-group-sm" style="flex:0 0 auto;">
                             <button type="button" class="btn btn-outline-secondary" title="Edit"
                                 onclick="event.stopPropagation(); editSimulateSection(${i});">
                                 <i class="bi bi-pencil"></i>
                             </button>
-                            ${section.path ? `<button type="button" class="btn btn-outline-secondary" title="Copy path"
-                                onclick="event.stopPropagation(); copySimulatePath(${i});">
+                            <button type="button" class="btn btn-outline-secondary" title="Copy contents"
+                                onclick="event.stopPropagation(); copySimulateContents(${i});">
                                 <i class="bi bi-clipboard"></i>
-                            </button>` : ''}
+                            </button>
                             <button type="button" class="btn btn-outline-danger" title="Delete"
                                 onclick="event.stopPropagation(); deleteSimulateSection(${i});">
                                 <i class="bi bi-trash"></i>
@@ -3421,6 +3446,20 @@
                 showToast('Path copied to clipboard', 'success');
             }).catch(() => {
                 showToast('Failed to copy path', 'error');
+            });
+        }
+
+        function copySimulateContents(sectionIndex) {
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            if (!section) return;
+            const content = typeof section.content === 'string'
+                ? section.content
+                : JSON.stringify(section.content ?? '', null, 2);
+            navigator.clipboard.writeText(content).then(() => {
+                showToast('Contents copied to clipboard', 'success');
+            }).catch(() => {
+                showToast('Failed to copy contents', 'error');
             });
         }
 

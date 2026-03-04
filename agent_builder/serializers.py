@@ -180,7 +180,7 @@ class ConfigFileSerializer(serializers.ModelSerializer):
 class UserOptionsSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserOptions
-        fields = ["active_tab", "agent_sub_tab"]
+        fields = ["active_tab", "agent_sub_tab", "last_simulate_path"]
 
 
 class ProjectSerializer(serializers.ModelSerializer):
