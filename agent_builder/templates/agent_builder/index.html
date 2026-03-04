@@ -196,6 +196,11 @@
             font-size: 0.75rem;
         }
 
+        /* Stacked modal z-index for delete config file modal over simulate modal */
+        #deleteConfigFileModal {
+            z-index: 1060;
+        }
+
         /* Markdown preview */
         .markdown-preview {
             padding: 1rem;
@@ -972,7 +977,7 @@
     </div>
 
     <!-- Delete Config File Modal -->
-    <div class="modal fade" id="deleteConfigFileModal" tabindex="-1">
+    <div class="modal fade" id="deleteConfigFileModal" tabindex="-1" data-bs-backdrop="static">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
@@ -1142,6 +1147,8 @@
         let allAgents = { claude: [], coderoo: [] };
         let allConfigFiles = [];
         let allProjects = [];
+        let lastSimulationData = null;
+        let pendingSimulateDeleteIndex = null;
         let viewMode = 'edit';
         let currentCreateSource = null;
         let createPollInterval = null;
@@ -1467,7 +1474,30 @@
             const cf = allConfigFiles.find(f => f.id === currentConfigFileId);
             if (!cf) return;
             document.getElementById('deleteConfigFileName').textContent = cf.path;
-            new bootstrap.Modal(document.getElementById('deleteConfigFileModal')).show();
+            const modalEl = document.getElementById('deleteConfigFileModal');
+            const simulateModalEl = document.getElementById('simulateModal');
+            const simulateWasOpen = simulateModalEl.classList.contains('show');
+
+            // Bump backdrop z-index when stacking over another modal
+            modalEl.addEventListener('shown.bs.modal', function onShown() {
+                modalEl.removeEventListener('shown.bs.modal', onShown);
+                const backdrops = document.querySelectorAll('.modal-backdrop');
+                if (backdrops.length > 1) {
+                    backdrops[backdrops.length - 1].style.zIndex = '1055';
+                }
+            });
+
+            // Re-show simulate modal if it was open when delete modal closes
+            if (simulateWasOpen) {
+                modalEl.addEventListener('hidden.bs.modal', function onHidden() {
+                    modalEl.removeEventListener('hidden.bs.modal', onHidden);
+                    if (!simulateModalEl.classList.contains('show')) {
+                        bootstrap.Modal.getOrCreateInstance(simulateModalEl).show();
+                    }
+                });
+            }
+
+            new bootstrap.Modal(modalEl).show();
         }
 
         async function deleteConfigFile(alsoDeleteFromDisk) {
@@ -1488,6 +1518,17 @@
                 }
 
                 bootstrap.Modal.getInstance(document.getElementById('deleteConfigFileModal')).hide();
+
+                // Clean up simulate view if deletion was triggered from there
+                if (pendingSimulateDeleteIndex !== null && lastSimulationData) {
+                    lastSimulationData.sections.splice(pendingSimulateDeleteIndex, 1);
+                    const simContainer = document.getElementById('simulateSections');
+                    if (simContainer) {
+                        renderSimulateResults(lastSimulationData, simContainer);
+                    }
+                    pendingSimulateDeleteIndex = null;
+                }
+
                 showToast(`Deleted ${cf ? cf.filename : 'config file'}${alsoDeleteFromDisk ? ' (and file)' : ''}`, 'success');
                 deselectAgent();
                 await loadConfigFiles();
@@ -2970,6 +3011,11 @@
             // Reset state
             document.getElementById('simulateResults').classList.add('d-none');
             document.getElementById('simulateLoading').classList.add('d-none');
+            // Populate project path datalist
+            const datalist = document.getElementById('projectPathOptions');
+            datalist.innerHTML = allProjects.map(p =>
+                `<option value="${simEscapeHtml(p.path)}" label="${simEscapeHtml(p.name)}">`
+            ).join('');
             modal.show();
         }
 
@@ -3000,6 +3046,7 @@
 
                 const data = await resp.json();
                 const normalized = normalizeSimulatePayload(data);
+                lastSimulationData = normalized;
                 renderSimulateResults(normalized, sectionsDiv);
 
                 // Show agent info
@@ -3214,21 +3261,31 @@
                 const card = document.createElement('div');
                 card.className = 'card mb-2';
                 card.innerHTML = `
-                    <div class="card-header d-flex justify-content-between align-items-center py-2"
-                         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                    <div class="card-header d-flex justify-content-between align-items-center py-2">
                         <span>
+                            <button type="button" class="btn btn-sm btn-link p-0 me-2 text-secondary"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                title="Expand/Collapse">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
                             <i class="bi ${icon} text-${color} me-2"></i>
                             <strong>${simEscapeHtml(section.title)}</strong>
-                            <button type="button"
-                                class="btn btn-sm btn-link p-0 ms-2 text-secondary align-baseline"
-                                title="Edit section"
-                                aria-label="Edit section"
-                                onclick="event.preventDefault(); event.stopPropagation(); editSimulateSection(${i});">
-                                <i class="bi bi-pencil"></i>
-                            </button>
                             ${section.path ? `<small class="text-muted ms-2">${simEscapeHtml(section.path)}</small>` : ''}
                         </span>
-                        <span class="badge bg-${color}">${section.type.replace(/_/g, ' ')}</span>
+                        <div class="btn-group btn-group-sm">
+                            <button type="button" class="btn btn-outline-secondary" title="Edit"
+                                onclick="event.stopPropagation(); editSimulateSection(${i});">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            ${section.path ? `<button type="button" class="btn btn-outline-secondary" title="Copy path"
+                                onclick="event.stopPropagation(); copySimulatePath(${i});">
+                                <i class="bi bi-clipboard"></i>
+                            </button>` : ''}
+                            <button type="button" class="btn btn-outline-danger" title="Delete"
+                                onclick="event.stopPropagation(); deleteSimulateSection(${i});">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
                     </div>
                     <div class="collapse" id="${collapseId}">
                         <div class="card-body p-0">
@@ -3236,6 +3293,18 @@
                         </div>
                     </div>
                 `;
+
+                // Rotate chevron on expand/collapse
+                const collapseEl = card.querySelector('.collapse');
+                const chevron = card.querySelector('.bi-chevron-right');
+                collapseEl.addEventListener('show.bs.collapse', () => {
+                    chevron.style.transform = 'rotate(90deg)';
+                    chevron.style.transition = 'transform 0.2s';
+                });
+                collapseEl.addEventListener('hide.bs.collapse', () => {
+                    chevron.style.transform = 'rotate(0deg)';
+                });
+
                 container.appendChild(card);
             });
         }
@@ -3252,7 +3321,150 @@
         }
 
         function editSimulateSection(sectionIndex) {
-            showToast(`Edit for section ${sectionIndex + 1} is not implemented yet.`, 'info');
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            if (!section) return;
+
+            const container = document.getElementById('simulateSections');
+            const card = container.children[sectionIndex];
+            const collapseEl = card.querySelector('.collapse');
+            const pre = card.querySelector('pre');
+            if (!pre) return; // already editing
+
+            const content = pre.textContent;
+
+            // Ensure section is expanded
+            bootstrap.Collapse.getOrCreateInstance(collapseEl, { toggle: false }).show();
+
+            const cardBody = card.querySelector('.card-body');
+            cardBody.innerHTML = '';
+            const textarea = document.createElement('textarea');
+            textarea.className = 'form-control font-monospace';
+            textarea.rows = 15;
+            textarea.style.cssText = 'font-size:0.85rem; border-radius:0;';
+            textarea.value = content;
+            cardBody.appendChild(textarea);
+
+            const btnDiv = document.createElement('div');
+            btnDiv.className = 'd-flex justify-content-end gap-2 p-2 border-top';
+            btnDiv.innerHTML = `
+                <button class="btn btn-sm btn-secondary" onclick="cancelEditSection(${sectionIndex})">Cancel</button>
+                <button class="btn btn-sm btn-success" onclick="saveEditSection(${sectionIndex})">
+                    <i class="bi bi-check-lg"></i> Save
+                </button>
+            `;
+            cardBody.appendChild(btnDiv);
+        }
+
+        function cancelEditSection(sectionIndex) {
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            const container = document.getElementById('simulateSections');
+            const card = container.children[sectionIndex];
+            const cardBody = card.querySelector('.card-body');
+            const content = typeof section.content === 'string'
+                ? section.content
+                : JSON.stringify(section.content ?? '', null, 2);
+            cardBody.innerHTML = `<pre class="mb-0 p-3" style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:0.85rem;">${simEscapeHtml(content)}</pre>`;
+        }
+
+        async function saveEditSection(sectionIndex) {
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            const container = document.getElementById('simulateSections');
+            const card = container.children[sectionIndex];
+            const textarea = card.querySelector('textarea');
+            if (!textarea) return;
+            const newContent = textarea.value;
+
+            try {
+                let endpoint = null;
+                let body = {};
+
+                if (section.type === 'config_file' && section.path) {
+                    const cf = allConfigFiles.find(f => f.path === section.path);
+                    if (cf) {
+                        endpoint = `/agent-builder/api/config-files/${cf.id}/`;
+                        body = { content: newContent };
+                    }
+                } else if (section.type === 'agent_description') {
+                    endpoint = `/agent-builder/api/agents/${currentAgentId}/`;
+                    body = { description: newContent };
+                }
+
+                if (!endpoint) {
+                    showToast('Cannot save this section type from simulate view', 'warning');
+                    return;
+                }
+
+                const res = await apiFetch(endpoint, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error('Save failed');
+
+                // Update stored data
+                section.content = newContent;
+                cancelEditSection(sectionIndex);
+                showToast('Section saved', 'success');
+            } catch (err) {
+                showToast('Failed to save: ' + err.message, 'error');
+            }
+        }
+
+        function copySimulatePath(sectionIndex) {
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            if (!section || !section.path) return;
+            navigator.clipboard.writeText(section.path).then(() => {
+                showToast('Path copied to clipboard', 'success');
+            }).catch(() => {
+                showToast('Failed to copy path', 'error');
+            });
+        }
+
+        async function deleteSimulateSection(sectionIndex) {
+            if (!lastSimulationData) return;
+            const section = lastSimulationData.sections[sectionIndex];
+            if (!section) return;
+
+            if (section.type === 'config_file' && section.path) {
+                // Find the config file and use the existing delete flow
+                const cf = allConfigFiles.find(f => f.path === section.path);
+                if (cf) {
+                    // Set up context for the delete modal
+                    currentConfigFileId = cf.id;
+                    pendingSimulateDeleteIndex = sectionIndex;
+                    openDeleteConfigFileModal();
+                    return;
+                }
+            }
+
+            if (!confirm(`Delete this ${section.type.replace(/_/g, ' ')} section?`)) return;
+
+            try {
+                if (section.type === 'agent_description') {
+                    // Clear description via PATCH, not DELETE the agent
+                    const res = await apiFetch(`/agent-builder/api/agents/${currentAgentId}/`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: '' }),
+                    });
+                    if (!res.ok) throw new Error('Delete failed');
+                } else {
+                    showToast('Cannot delete this section type from simulate view', 'warning');
+                    return;
+                }
+
+                // Re-render to fix button indices
+                lastSimulationData.sections.splice(sectionIndex, 1);
+                const container = document.getElementById('simulateSections');
+                renderSimulateResults(lastSimulationData, container);
+                showToast('Section deleted', 'success');
+            } catch (err) {
+                showToast('Failed to delete: ' + err.message, 'error');
+            }
         }
 
         function simEscapeHtml(str) {
@@ -3279,7 +3491,9 @@
                             Project Path (optional)
                         </label>
                         <input type="text" class="form-control" id="simulateProjectPath"
-                            placeholder="/storage/Projects/my-project">
+                            placeholder="/storage/Projects/my-project"
+                            list="projectPathOptions">
+                        <datalist id="projectPathOptions"></datalist>
                         <div class="form-text">
                             Leave empty to see context without project-specific scoping.
                         </div>
