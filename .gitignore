@@ -1,3 +1,14 @@
+# Coderoo #
+.coderoo/
+coderoo.config.json5
+Project
+
+# MCP Configuration (contains local paths)
+.mcp.json
+
+# Cursor, VS Code #
+*.code-workspace
+
 # Django #
 *.log
 *.pot

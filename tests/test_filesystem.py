@@ -465,7 +465,7 @@ class TestWriteConfigFile:
         result_path, result_mtime = write_config_file(FakeConfigFile())
         assert result_path == target
         assert result_mtime is not None
-        assert target.read_text() == "# New content"
+        assert target.read_text() == "# New content\n"
 
     def test_write_creates_parent_dirs(self, tmp_path):
         target = tmp_path / "nested" / "dir" / "CLAUDE.md"
@@ -476,4 +476,4 @@ class TestWriteConfigFile:
 
         write_config_file(FakeConfigFile())
         assert target.exists()
-        assert target.read_text() == "nested"
+        assert target.read_text() == "nested\n"

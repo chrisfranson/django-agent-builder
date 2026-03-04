@@ -1,11 +1,17 @@
 """Tests for simulate mode context assembly."""
 
+from __future__ import annotations
+
+import json
+import subprocess
+from unittest.mock import patch
+
 import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from agent_builder.models import Agent, AgentChunk, AgentInstruction, Chunk, ConfigFile, Instruction
-from agent_builder.simulate import simulate_session
+from agent_builder.models import Agent
+from agent_builder.simulate import SimulateSessionError, simulate_session
 
 User = get_user_model()
 
@@ -23,134 +29,133 @@ def api_client(user):
 
 
 @pytest.fixture
-def agent_with_chunks(user):
-    agent = Agent.objects.create(
+def agent(user):
+    return Agent.objects.create(
         name="test-agent",
         display_name="Test Agent",
         source="coderoo",
         model="sonnet",
         user=user,
     )
-    chunk = Chunk.objects.create(title="Main", content="# Agent Instructions\nDo stuff.", user=user)
-    AgentChunk.objects.create(agent=agent, chunk=chunk, position=0)
-    return agent
 
 
 @pytest.fixture
-def config_files(user):
-    """Create config files at different scopes."""
-    global_cf = ConfigFile.objects.create(
-        filename="CLAUDE.md",
-        path="/home/testuser/.claude/CLAUDE.md",
-        content="Global instructions",
-        user=user,
-    )
-    project_cf = ConfigFile.objects.create(
-        filename="CLAUDE.md",
-        path="/storage/Projects/my-project/CLAUDE.md",
-        content="Project-specific instructions",
-        user=user,
-    )
-    other_cf = ConfigFile.objects.create(
-        filename="AGENTS.md",
-        path="/storage/Projects/other-project/AGENTS.md",
-        content="Other project agents",
-        user=user,
-    )
-    return global_cf, project_cf, other_cf
-
-
-@pytest.fixture
-def instructions_with_modes(user, agent_with_chunks):
-    auto_instr = Instruction.objects.create(
-        name="auto-instr",
-        display_name="Auto Instruction",
-        content="This is auto-injected.",
-        injection_mode="auto_inject",
-        user=user,
-    )
-    demand_instr = Instruction.objects.create(
-        name="demand-instr",
-        display_name="Demand Instruction",
-        content="This is on-demand.",
-        injection_mode="on_demand",
-        user=user,
-    )
-    AgentInstruction.objects.create(agent=agent_with_chunks, instruction=auto_instr)
-    AgentInstruction.objects.create(agent=agent_with_chunks, instruction=demand_instr)
-    return auto_instr, demand_instr
-
-
-# --- Tests ---
+def preview_payload():
+    return {
+        "status": "success",
+        "project_path": "/tmp/project",
+        "role_description": "Role markdown",
+        "global_instructions": "Global instructions",
+        "docs": [{"/tmp/project/AGENTS.md": "Project config file"}],
+        "task_docs": [{"description.md": "Task description"}],
+        "available_instructions": [["my-instruction", "Instruction description"]],
+        "available_commands": {"send_sms": "Send an SMS"},
+        "active_tasks": ["simulate-use-preview-context"],
+        "relevant_files": ["agent_builder/simulate.py"],
+        "md_files": [{"/tmp/project/AGENTS.md": "Agent file content"}],
+    }
 
 
 @pytest.mark.django_db
 class TestSimulateSession:
-    def test_basic_simulation_returns_agent_info(self, agent_with_chunks):
-        result = simulate_session(agent_with_chunks)
-        assert result["agent"]["name"] == "test-agent"
-        assert result["agent"]["source"] == "coderoo"
-
-    def test_agent_description_section(self, agent_with_chunks):
-        result = simulate_session(agent_with_chunks)
-        desc_sections = [s for s in result["sections"] if s["type"] == "agent_description"]
-        assert len(desc_sections) == 1
-        assert "# Agent Instructions" in desc_sections[0]["content"]
-
-    def test_config_files_scoped_to_project(self, agent_with_chunks, config_files):
-        result = simulate_session(agent_with_chunks, project_path="/storage/Projects/my-project")
-        cf_sections = [s for s in result["sections"] if s["type"] == "config_file"]
-        paths = [s["path"] for s in cf_sections]
-        # Should include the project's CLAUDE.md but NOT the other project's
-        assert "/storage/Projects/my-project/CLAUDE.md" in paths
-        assert "/storage/Projects/other-project/AGENTS.md" not in paths
-
-    def test_config_files_no_project_returns_all(self, agent_with_chunks, config_files):
-        result = simulate_session(agent_with_chunks, project_path="")
-        cf_sections = [s for s in result["sections"] if s["type"] == "config_file"]
-        assert len(cf_sections) == 3  # All config files
-
-    def test_docs_include_section(self, agent_with_chunks, instructions_with_modes):
-        result = simulate_session(agent_with_chunks)
-        docs_sections = [s for s in result["sections"] if s["type"] == "docs_include"]
-        assert len(docs_sections) == 1
-        assert docs_sections[0]["title"] == "docs.include: auto-instr"
-        assert "auto-injected" in docs_sections[0]["content"]
-
-    def test_reminder_section(self, agent_with_chunks, instructions_with_modes):
-        result = simulate_session(agent_with_chunks)
-        reminder_sections = [s for s in result["sections"] if s["type"] == "reminder"]
-        assert len(reminder_sections) == 1
-        assert "demand-instr" in reminder_sections[0]["content"]
-
-    def test_coderoo_agent_config_section(self, agent_with_chunks):
-        result = simulate_session(agent_with_chunks)
-        config_sections = [s for s in result["sections"] if s["type"] == "agent_config"]
-        assert len(config_sections) == 1
-
-    def test_claude_agent_no_config_section(self, user):
-        agent = Agent.objects.create(
-            name="claude-agent",
-            display_name="Claude Agent",
-            source="claude",
-            model="sonnet",
-            user=user,
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_uses_preview_context_command(self, mock_run, agent, preview_payload):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(preview_payload),
+            stderr="",
         )
-        result = simulate_session(agent)
-        config_sections = [s for s in result["sections"] if s["type"] == "agent_config"]
-        assert len(config_sections) == 0
 
-    def test_agent_with_no_chunks(self, user):
-        agent = Agent.objects.create(
-            name="empty-agent",
-            display_name="Empty Agent",
-            source="claude",
-            model="sonnet",
-            user=user,
+        result = simulate_session(
+            agent,
+            project_path="/tmp/project",
+            role="orchestrator",
+            context="my-context",
+            task="my-task",
+            runtime="codex",
         )
+
+        assert result == preview_payload
+
+        command = mock_run.call_args.args[0]
+        assert command[0].endswith("coderoo")
+        assert command[1:3] == ["preview-context", "--json"]
+        assert "--agent" in command and "test-agent" in command
+        assert "--role" in command and "orchestrator" in command
+        assert "--context" in command and "my-context" in command
+        assert "--task" in command and "my-task" in command
+        assert "--runtime" in command and "codex" in command
+        assert "--include-md-files" in command
+        assert "--path" in command and "/tmp/project" in command
+
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_moves_md_files_to_first_key(self, mock_run, agent, preview_payload):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(preview_payload),
+            stderr="",
+        )
+
         result = simulate_session(agent)
-        desc_sections = [s for s in result["sections"] if s["type"] == "agent_description"]
-        assert len(desc_sections) == 0  # No content = no section
+
+        assert list(result.keys())[0] == "md_files"
+
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_propagates_project_path(self, mock_run, agent, preview_payload):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(preview_payload),
+            stderr="",
+        )
+
+        simulate_session(agent, project_path="/tmp/project")
+
+        command = mock_run.call_args.args[0]
+        assert "--path" in command
+        assert "/tmp/project" in command
+
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_command_failure_raises(self, mock_run, agent):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="preview failed",
+        )
+
+        with pytest.raises(SimulateSessionError, match="preview failed"):
+            simulate_session(agent)
+
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_invalid_json_raises(self, mock_run, agent):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="{bad json}",
+            stderr="",
+        )
+
+        with pytest.raises(SimulateSessionError, match="invalid JSON"):
+            simulate_session(agent)
+
+    @patch("agent_builder.simulate.subprocess.run")
+    def test_simulate_session_executable_disappears_raises(self, mock_run, agent):
+        mock_run.side_effect = FileNotFoundError("coderoo not found")
+
+        with pytest.raises(SimulateSessionError, match="became unavailable"):
+            simulate_session(agent)
+
+    @patch("agent_builder.simulate.os.access", return_value=False)
+    @patch("agent_builder.simulate.Path.exists", return_value=False)
+    @patch("agent_builder.simulate.shutil.which", return_value=None)
+    def test_simulate_session_missing_command_raises(
+        self, _mock_which, _mock_exists, _mock_access, agent
+    ):
+        with pytest.raises(SimulateSessionError, match="command not found"):
+            simulate_session(agent)
 
 
 @pytest.mark.django_db
@@ -164,7 +169,7 @@ class TestSimulateAPI:
         assert resp.status_code in (401, 403)
 
     def test_simulate_endpoint_requires_agent_id(self, api_client):
-        client, user = api_client
+        client, _ = api_client
         resp = client.post(
             "/agent-builder/api/simulate/",
             {},
@@ -172,20 +177,67 @@ class TestSimulateAPI:
         )
         assert resp.status_code == 400
 
-    def test_simulate_endpoint_returns_context(self, api_client, agent_with_chunks):
-        client, user = api_client
+    @patch("agent_builder.simulate.simulate_session")
+    def test_simulate_endpoint_returns_context(self, mock_simulate, api_client, agent):
+        client, _ = api_client
+        mock_simulate.return_value = {"status": "success", "project_path": "/tmp/project"}
+
         resp = client.post(
             "/agent-builder/api/simulate/",
-            {"agent_id": agent_with_chunks.pk},
+            {"agent_id": agent.pk, "project_path": "/tmp/project"},
             format="json",
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert "sections" in data
-        assert data["agent"]["name"] == "test-agent"
+        assert data["status"] == "success"
+        assert data["project_path"] == "/tmp/project"
+
+        call_args = mock_simulate.call_args
+        assert call_args.args[0] == agent
+        assert call_args.args[1] == "/tmp/project"
+
+    @patch("agent_builder.simulate.simulate_session")
+    def test_simulate_endpoint_passes_preview_flags(self, mock_simulate, api_client, agent):
+        client, _ = api_client
+        mock_simulate.return_value = {"status": "success"}
+
+        resp = client.post(
+            "/agent-builder/api/simulate/",
+            {
+                "agent_id": agent.pk,
+                "role": "orchestrator",
+                "context": "project-researcher",
+                "task": "my-task",
+                "runtime": "codex",
+            },
+            format="json",
+        )
+
+        assert resp.status_code == 200
+        call_kwargs = mock_simulate.call_args.kwargs
+        assert call_kwargs["role"] == "orchestrator"
+        assert call_kwargs["context"] == "project-researcher"
+        assert call_kwargs["task"] == "my-task"
+        assert call_kwargs["runtime"] == "codex"
+
+    @patch("agent_builder.simulate.simulate_session")
+    def test_simulate_endpoint_returns_502_on_preview_failure(
+        self, mock_simulate, api_client, agent
+    ):
+        client, _ = api_client
+        mock_simulate.side_effect = SimulateSessionError("preview failed")
+
+        resp = client.post(
+            "/agent-builder/api/simulate/",
+            {"agent_id": agent.pk},
+            format="json",
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "preview failed"
 
     def test_simulate_endpoint_agent_not_found(self, api_client):
-        client, user = api_client
+        client, _ = api_client
         resp = client.post(
             "/agent-builder/api/simulate/",
             {"agent_id": 99999},
@@ -194,7 +246,7 @@ class TestSimulateAPI:
         assert resp.status_code == 404
 
     def test_simulate_endpoint_other_users_agent(self, api_client):
-        client, user = api_client
+        client, _ = api_client
         other_user = User.objects.create_user(username="other", password="pass")
         other_agent = Agent.objects.create(
             name="other-agent",

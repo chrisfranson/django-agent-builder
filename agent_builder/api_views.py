@@ -425,9 +425,11 @@ def import_all(request):
     """Bulk import agents from disk into the database."""
     from django.utils import timezone as tz
 
+    from .filesystem import render_agent
     from .sync import SyncStatus, detect_import_status
 
     now = tz.now()
+    resolutions = request.data.get("resolutions", {})
     imported = 0
     skipped = 0
     updated = 0
@@ -463,14 +465,32 @@ def import_all(request):
             _update_agent_from_disk(existing, agent_data, now)
             updated += 1
         elif status == SyncStatus.CONFLICT:
-            conflicts.append(
-                {
-                    "type": "agent",
-                    "name": agent_data["name"],
-                    "source": agent_data["source"],
-                    "conflict_type": "both_modified",
-                }
-            )
+            conflict_key = f"agent:{agent_data['name']}"
+            resolution = resolutions.get(conflict_key)
+            if resolution == "disk":
+                _update_agent_from_disk(existing, agent_data, now)
+                updated += 1
+            elif resolution == "db":
+                # Keep DB version but update sync tracking so conflict clears
+                Agent.objects.filter(pk=existing.pk).update(
+                    file_mtime=agent_data.get("mtime"),
+                    last_synced_at=now,
+                )
+                skipped += 1
+            else:
+                # No resolution provided - return conflict with diff data
+                db_content = render_agent(existing)
+                disk_content = _render_disk_agent_content(agent_data)
+                conflicts.append(
+                    {
+                        "type": "agent",
+                        "name": agent_data["name"],
+                        "source": agent_data["source"],
+                        "conflict_type": "both_modified",
+                        "disk_content": disk_content,
+                        "db_content": db_content,
+                    }
+                )
         else:
             skipped += 1
 
@@ -515,17 +535,56 @@ def import_all(request):
             )
             instructions_updated += 1
         elif status == SyncStatus.CONFLICT:
-            instruction_conflicts.append(
-                {
-                    "type": "instruction",
-                    "name": instr_data["name"],
-                    "conflict_type": "both_modified",
-                }
-            )
+            conflict_key = f"instruction:{instr_data['name']}"
+            resolution = resolutions.get(conflict_key)
+            if resolution == "disk":
+                existing.content = instr_data["content"]
+                existing.save()
+                Instruction.objects.filter(pk=existing.pk).update(
+                    file_mtime=instr_data.get("mtime"),
+                    last_synced_at=now,
+                )
+                instructions_updated += 1
+            elif resolution == "db":
+                Instruction.objects.filter(pk=existing.pk).update(
+                    file_mtime=instr_data.get("mtime"),
+                    last_synced_at=now,
+                )
+                instructions_skipped += 1
+            else:
+                instruction_conflicts.append(
+                    {
+                        "type": "instruction",
+                        "name": instr_data["name"],
+                        "conflict_type": "both_modified",
+                        "disk_content": instr_data["content"],
+                        "db_content": existing.content,
+                    }
+                )
         else:
             instructions_skipped += 1
 
-    # Config files
+    # Config files -- resolve any symlinked paths in existing records
+    from pathlib import Path as _ImportPath
+
+    for cf in ConfigFile.objects.filter(user=request.user):
+        resolved = str(_ImportPath(cf.path).resolve())
+        if resolved != cf.path:
+            if not ConfigFile.objects.filter(user=request.user, path=resolved).exists():
+                cf.path = resolved
+                cf.save(update_fields=["path"])
+            else:
+                cf.delete()  # duplicate of the resolved record
+
+    for proj in Project.objects.filter(user=request.user):
+        resolved = str(_ImportPath(proj.path).resolve())
+        if resolved != proj.path:
+            if not Project.objects.filter(user=request.user, path=resolved).exists():
+                proj.path = resolved
+                proj.save(update_fields=["path"])
+            else:
+                proj.delete()
+
     config_files_imported = 0
     config_files_skipped = 0
     config_files_updated = 0
@@ -566,14 +625,33 @@ def import_all(request):
             )
             config_files_updated += 1
         elif status == SyncStatus.CONFLICT:
-            config_file_conflicts.append(
-                {
-                    "type": "config_file",
-                    "name": cf_data["filename"],
-                    "path": cf_data["path"],
-                    "conflict_type": "both_modified",
-                }
-            )
+            conflict_key = f"config_file:{cf_data['path']}"
+            resolution = resolutions.get(conflict_key)
+            if resolution == "disk":
+                existing.content = cf_data["content"]
+                existing.save()
+                ConfigFile.objects.filter(pk=existing.pk).update(
+                    file_mtime=cf_data.get("mtime"),
+                    last_synced_at=now,
+                )
+                config_files_updated += 1
+            elif resolution == "db":
+                ConfigFile.objects.filter(pk=existing.pk).update(
+                    file_mtime=cf_data.get("mtime"),
+                    last_synced_at=now,
+                )
+                config_files_skipped += 1
+            else:
+                config_file_conflicts.append(
+                    {
+                        "type": "config_file",
+                        "name": cf_data["filename"],
+                        "path": cf_data["path"],
+                        "conflict_type": "both_modified",
+                        "disk_content": cf_data["content"],
+                        "db_content": existing.content,
+                    }
+                )
         else:
             config_files_skipped += 1
 
@@ -647,6 +725,24 @@ def apply_all(request):
     now = tz.now()
     force_paths = set(request.data.get("force_paths", []))
 
+    # Handle delete-from-db requests
+    delete_from_db = request.data.get("delete_from_db", [])
+    deleted_from_db_count = 0
+    for item in delete_from_db:
+        item_type = item.get("type")
+        try:
+            if item_type == "agent":
+                Agent.objects.filter(user=request.user, name=item["name"]).delete()
+                deleted_from_db_count += 1
+            elif item_type == "instruction":
+                Instruction.objects.filter(user=request.user, name=item["name"]).delete()
+                deleted_from_db_count += 1
+            elif item_type == "config_file":
+                ConfigFile.objects.filter(user=request.user, path=item["path"]).delete()
+                deleted_from_db_count += 1
+        except Exception:
+            pass  # Skip items that fail to delete
+
     agents = Agent.objects.filter(user=request.user, is_active=True)
     results = []
     for agent in agents:
@@ -661,6 +757,15 @@ def apply_all(request):
         force_this = str(disk_path) in force_paths if disk_path else False
 
         if not force_this:
+            # Detect deleted files: disk file missing but was previously synced
+            if (
+                disk_path
+                and disk_mtime is None
+                and (agent.last_synced_at is not None or agent.file_mtime is not None)
+            ):
+                results.append({"name": agent.name, "status": "deleted_on_disk"})
+                continue
+
             status = detect_apply_status(
                 disk_mtime=disk_mtime,
                 stored_file_mtime=agent.file_mtime,
@@ -694,6 +799,13 @@ def apply_all(request):
         force_this = str(disk_path) in force_paths
 
         if not force_this:
+            # Detect deleted files: disk file missing but was previously synced
+            if disk_mtime is None and (
+                instruction.last_synced_at is not None or instruction.file_mtime is not None
+            ):
+                instruction_results.append({"name": instruction.name, "status": "deleted_on_disk"})
+                continue
+
             status = detect_apply_status(
                 disk_mtime=disk_mtime,
                 stored_file_mtime=instruction.file_mtime,
@@ -735,6 +847,13 @@ def apply_all(request):
         force_this = str(disk_path) in force_paths
 
         if not force_this:
+            # Detect deleted files: disk file missing but was previously synced
+            if disk_mtime is None and (cf.last_synced_at is not None or cf.file_mtime is not None):
+                config_file_results.append(
+                    {"name": cf.filename, "path": cf.path, "status": "deleted_on_disk"}
+                )
+                continue
+
             status = detect_apply_status(
                 disk_mtime=disk_mtime,
                 stored_file_mtime=cf.file_mtime,
@@ -773,6 +892,7 @@ def apply_all(request):
             "results": results,
             "instruction_results": instruction_results,
             "config_file_results": config_file_results,
+            "deleted_from_db": deleted_from_db_count,
         }
     )
 
@@ -788,9 +908,13 @@ def apply_all_preview(request):
         DEFAULT_CODEROO_AGENTS_DIR,
         DEFAULT_INSTRUCTIONS_DIR,
         _get_file_mtime,
+        normalize_trailing_newline,
         render_agent,
     )
     from .sync import SyncStatus, detect_apply_status
+
+    def _norm(text: str | None) -> str | None:
+        return normalize_trailing_newline(text) if text else text
 
     def _read_disk(path: _Path) -> str | None:
         """Read file from disk, return None if it doesn't exist."""
@@ -811,7 +935,12 @@ def apply_all_preview(request):
         db_content = render_agent(agent)
         disk_content = _read_disk(path)
         disk_mtime = _get_file_mtime(path)
-        has_changes = disk_content is None or disk_content != db_content
+        deleted_on_disk = disk_content is None and (
+            agent.last_synced_at is not None or agent.file_mtime is not None
+        )
+        has_changes = (not deleted_on_disk) and (
+            disk_content is None or _norm(disk_content) != _norm(db_content)
+        )
 
         status = detect_apply_status(
             disk_mtime=disk_mtime,
@@ -821,18 +950,19 @@ def apply_all_preview(request):
         )
         has_conflict = status == SyncStatus.CONFLICT
 
-        agent_list.append(
-            {
-                "name": agent.name,
-                "source": agent.source,
-                "path": str(path),
-                "has_changes": has_changes,
-                "has_conflict": has_conflict,
-                "sync_status": status.value,
-                "disk_content": disk_content,
-                "db_content": db_content,
-            }
-        )
+        item = {
+            "name": agent.name,
+            "source": agent.source,
+            "path": str(path),
+            "has_changes": has_changes,
+            "has_conflict": has_conflict,
+            "sync_status": status.value,
+            "disk_content": disk_content,
+            "db_content": db_content,
+        }
+        if deleted_on_disk:
+            item["deleted_on_disk"] = True
+        agent_list.append(item)
 
     instructions = Instruction.objects.filter(user=request.user)
     instruction_list = []
@@ -841,7 +971,12 @@ def apply_all_preview(request):
         db_content = inst.content
         disk_content = _read_disk(path)
         disk_mtime = _get_file_mtime(path)
-        has_changes = disk_content is None or disk_content != db_content
+        deleted_on_disk = disk_content is None and (
+            inst.last_synced_at is not None or inst.file_mtime is not None
+        )
+        has_changes = (not deleted_on_disk) and (
+            disk_content is None or _norm(disk_content) != _norm(db_content)
+        )
 
         status = detect_apply_status(
             disk_mtime=disk_mtime,
@@ -851,17 +986,18 @@ def apply_all_preview(request):
         )
         has_conflict = status == SyncStatus.CONFLICT
 
-        instruction_list.append(
-            {
-                "name": inst.name,
-                "path": str(path),
-                "has_changes": has_changes,
-                "has_conflict": has_conflict,
-                "sync_status": status.value,
-                "disk_content": disk_content,
-                "db_content": db_content,
-            }
-        )
+        item = {
+            "name": inst.name,
+            "path": str(path),
+            "has_changes": has_changes,
+            "has_conflict": has_conflict,
+            "sync_status": status.value,
+            "disk_content": disk_content,
+            "db_content": db_content,
+        }
+        if deleted_on_disk:
+            item["deleted_on_disk"] = True
+        instruction_list.append(item)
 
     config_files = ConfigFile.objects.filter(user=request.user)
     config_file_list = []
@@ -870,7 +1006,12 @@ def apply_all_preview(request):
         db_content = cf.content
         disk_content = _read_disk(path)
         disk_mtime = _get_file_mtime(path)
-        has_changes = disk_content is None or disk_content != db_content
+        deleted_on_disk = disk_content is None and (
+            cf.last_synced_at is not None or cf.file_mtime is not None
+        )
+        has_changes = (not deleted_on_disk) and (
+            disk_content is None or _norm(disk_content) != _norm(db_content)
+        )
 
         status = detect_apply_status(
             disk_mtime=disk_mtime,
@@ -880,17 +1021,18 @@ def apply_all_preview(request):
         )
         has_conflict = status == SyncStatus.CONFLICT
 
-        config_file_list.append(
-            {
-                "filename": cf.filename,
-                "path": cf.path,
-                "has_changes": has_changes,
-                "has_conflict": has_conflict,
-                "sync_status": status.value,
-                "disk_content": disk_content,
-                "db_content": db_content,
-            }
-        )
+        item = {
+            "filename": cf.filename,
+            "path": cf.path,
+            "has_changes": has_changes,
+            "has_conflict": has_conflict,
+            "sync_status": status.value,
+            "disk_content": disk_content,
+            "db_content": db_content,
+        }
+        if deleted_on_disk:
+            item["deleted_on_disk"] = True
+        config_file_list.append(item)
 
     return Response(
         {
@@ -905,10 +1047,14 @@ def apply_all_preview(request):
 @perm_classes([IsAuthenticated])
 def simulate(request):
     """Simulate a session start and return the assembled context."""
-    from .simulate import simulate_session
+    from .simulate import SimulateSessionError, simulate_session
 
     agent_id = request.data.get("agent_id")
     project_path = request.data.get("project_path", "")
+    role = request.data.get("role", "")
+    context = request.data.get("context", "")
+    task = request.data.get("task", "")
+    runtime = request.data.get("runtime", "")
 
     if not agent_id:
         return Response({"detail": "agent_id is required."}, status=400)
@@ -917,7 +1063,18 @@ def simulate(request):
     if not agent:
         return Response({"detail": "Agent not found."}, status=404)
 
-    result = simulate_session(agent, project_path)
+    try:
+        result = simulate_session(
+            agent,
+            project_path,
+            role=role,
+            context=context,
+            task=task,
+            runtime=runtime,
+        )
+    except SimulateSessionError as exc:
+        return Response({"detail": str(exc)}, status=502)
+
     return Response(result)
 
 
@@ -971,6 +1128,17 @@ def _update_agent_from_disk(agent: Agent, agent_data: dict, sync_time) -> None:
         file_mtime=agent_data.get("mtime"),
         last_synced_at=sync_time,
     )
+
+
+def _render_disk_agent_content(agent_data: dict) -> str:
+    """Render agent content from disk data in the same format as render_agent."""
+    body = agent_data.get("content", "")
+    frontmatter = agent_data.get("frontmatter", "")
+    if frontmatter:
+        if body:
+            return f"---\n{frontmatter}\n---\n\n{body}"
+        return f"---\n{frontmatter}\n---"
+    return body
 
 
 def _import_agent(user, agent_data: dict) -> Agent:

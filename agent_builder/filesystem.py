@@ -11,6 +11,11 @@ from pathlib import Path
 from .models import Agent, AgentChunk
 
 
+def normalize_trailing_newline(text: str) -> str:
+    """Ensure text ends with exactly one newline (POSIX convention)."""
+    return text.rstrip("\n") + "\n" if text else text
+
+
 def _get_file_mtime(path: Path) -> datetime | None:
     """Get a file's modified time as a timezone-aware datetime."""
     try:
@@ -24,11 +29,11 @@ def _get_file_mtime(path: Path) -> datetime | None:
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".tox", ".venv", "venv"}
 CONFIG_FILENAMES = {"CLAUDE.md", "AGENTS.md"}
 DEFAULT_SCAN_ROOTS = [
-    Path("/storage/Projects"),
-    Path.home() / "Projects",
+    Path("/storage/Projects").resolve(),
+    (Path.home() / "Projects").resolve(),
 ]
 DEFAULT_EXTRA_PATHS = [
-    Path.home() / ".claude" / "CLAUDE.md",
+    (Path.home() / ".claude" / "CLAUDE.md").resolve(),
 ]
 
 # Default paths
@@ -79,7 +84,7 @@ def write_agent(
 
     Returns (path, mtime) -- the path of the primary file written and its new mtime.
     """
-    content = render_agent(agent)
+    content = normalize_trailing_newline(render_agent(agent))
 
     if agent.source == "claude":
         target_dir = claude_agents_dir or DEFAULT_CLAUDE_AGENTS_DIR
@@ -172,7 +177,7 @@ def write_instruction(
     target_dir = instructions_dir or DEFAULT_INSTRUCTIONS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{instruction.name}.md"
-    target_path.write_text(instruction.content)
+    target_path.write_text(normalize_trailing_newline(instruction.content))
     return target_path, _get_file_mtime(target_path)
 
 
@@ -409,5 +414,5 @@ def write_config_file(config_file) -> tuple[Path, datetime | None]:
     """Write a ConfigFile's content back to disk."""
     target = Path(config_file.path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(config_file.content)
+    target.write_text(normalize_trailing_newline(config_file.content))
     return target, _get_file_mtime(target)

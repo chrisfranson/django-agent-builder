@@ -1,155 +1,137 @@
-"""Simulate mode: assemble the full context an agent receives at session start."""
+"""Simulate mode: preview assembled context via `coderoo preview-context`."""
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
-from .filesystem import generate_coderoo_config, render_agent
-from .models import Agent, AgentInstruction, ConfigFile
+from .models import Agent
+
+
+class SimulateSessionError(RuntimeError):
+    """Raised when simulate context preview cannot be generated."""
 
 
 def simulate_session(
     agent: Agent,
     project_path: str = "",
+    *,
+    role: str = "",
+    context: str = "",
+    task: str = "",
+    runtime: str = "",
 ) -> dict[str, Any]:
-    """Assemble the full context an agent would receive at session start.
+    """Get the raw context preview payload from `coderoo preview-context`.
 
     Args:
         agent: The Agent instance to simulate.
-        project_path: Optional project path for scope-matching ConfigFiles.
+        project_path: Optional project path passed to preview command.
+        role: Optional role override.
+        context: Optional context override.
+        task: Optional task name to include.
+        runtime: Optional runtime identifier.
 
     Returns:
-        Dictionary with sections:
-        - agent_description: The rendered agent markdown (frontmatter + chunks)
-        - config_files: List of CLAUDE.md/AGENTS.md that apply to the project
-        - docs_include: List of auto-injected instruction contents
-        - reminder: List of on-demand instruction references
-        - agent_config: The generated Coderoo config (if coderoo agent)
+        Raw JSON object emitted by `coderoo preview-context --json`.
     """
-    result: dict[str, Any] = {
-        "agent": {
-            "name": agent.name,
-            "display_name": agent.display_name,
-            "source": agent.source,
-            "model": agent.model,
-        },
-        "sections": [],
-    }
+    payload = _run_preview_context(
+        agent=agent,
+        project_path=project_path,
+        role=role,
+        context=context,
+        task=task,
+        runtime=runtime,
+    )
+    return _prioritize_md_files(payload)
 
-    # Section 1: Agent description (rendered markdown from chunks)
-    rendered = render_agent(agent)
-    if rendered:
-        result["sections"].append(
-            {
-                "title": f"Agent Description: {agent.display_name}",
-                "type": "agent_description",
-                "content": rendered,
-            }
+
+def _run_preview_context(
+    *,
+    agent: Agent,
+    project_path: str,
+    role: str,
+    context: str,
+    task: str,
+    runtime: str,
+) -> dict[str, Any]:
+    coderoo_executable = _resolve_coderoo_executable()
+    command = [coderoo_executable, "preview-context", "--json", "--agent", agent.name]
+    if role:
+        command.extend(["--role", role])
+    if context:
+        command.extend(["--context", context])
+    if task:
+        command.extend(["--task", task])
+    if runtime:
+        command.extend(["--runtime", runtime])
+    command.append("--include-md-files")
+    if project_path:
+        command.extend(["--path", project_path])
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
         )
+    except FileNotFoundError as exc:
+        raise SimulateSessionError(
+            "coderoo executable became unavailable during invocation."
+        ) from exc
+    except OSError as exc:
+        raise SimulateSessionError(f"Failed to run coderoo preview-context: {exc}") from exc
 
-    # Section 2: Config files (CLAUDE.md / AGENTS.md) scoped to project_path
-    config_files = _get_scoped_config_files(agent.user, project_path)
-    for cf in config_files:
-        result["sections"].append(
-            {
-                "title": f"{cf.filename} ({cf.scope})",
-                "type": "config_file",
-                "path": cf.path,
-                "content": cf.content,
-            }
-        )
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail = stderr or stdout or "unknown error"
+        raise SimulateSessionError(f"coderoo preview-context failed: {detail}")
 
-    # Section 3: docs.include (auto-injected instructions)
-    docs_include = _get_docs_include_instructions(agent)
-    for instr_name, instr_content in docs_include:
-        result["sections"].append(
-            {
-                "title": f"docs.include: {instr_name}",
-                "type": "docs_include",
-                "content": instr_content,
-            }
-        )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SimulateSessionError("coderoo preview-context returned invalid JSON.") from exc
 
-    # Section 4: Reminder (on-demand instructions)
-    reminders = _get_reminder_instructions(agent)
-    if reminders:
-        reminder_lines = [f"- [{name}] {display_name}" for name, display_name in reminders]
-        result["sections"].append(
-            {
-                "title": "Reminder (On-Demand Instructions)",
-                "type": "reminder",
-                "content": "\n".join(reminder_lines),
-            }
-        )
+    if not isinstance(payload, dict):
+        raise SimulateSessionError("coderoo preview-context returned an unexpected response.")
 
-    # Section 5: Agent config (Coderoo agents only)
-    if agent.source == "coderoo":
-        if agent.config:
-            result["sections"].append(
-                {
-                    "title": "Agent Config (JSON5)",
-                    "type": "agent_config",
-                    "content": agent.config,
-                }
-            )
-        else:
-            generated = generate_coderoo_config(agent)
-            result["sections"].append(
-                {
-                    "title": "Agent Config (Generated)",
-                    "type": "agent_config",
-                    "content": json.dumps(generated, indent=2),
-                }
-            )
-
-    return result
+    return payload
 
 
-def _get_scoped_config_files(user, project_path: str) -> list[ConfigFile]:
-    """Return ConfigFiles whose scope is a parent of (or equal to) the project path.
+def _resolve_coderoo_executable() -> str:
+    """Resolve a runnable Coderoo CLI path for shell and service environments."""
+    env_override = os.environ.get("CODEROO_BIN", "").strip()
+    if env_override:
+        return env_override
 
-    If no project_path is provided, return all config files for the user.
-    Config files are returned in order from broadest scope to narrowest.
-    """
-    config_files = ConfigFile.objects.filter(user=user).order_by("path")
-    if not project_path:
-        return list(config_files)
+    resolved = shutil.which("coderoo")
+    if resolved:
+        return resolved
 
-    # Normalize the project path
-    normalized_project = str(Path(project_path).resolve())
+    fallback = Path.home() / ".local" / "bin" / "coderoo"
+    if fallback.exists() and os.access(fallback, os.X_OK):
+        return str(fallback)
 
-    matching = []
-    for cf in config_files:
-        scope = cf.scope
-        # A config file applies if:
-        # 1. The project path is within the config file's scope, OR
-        # 2. The config file is a global config (lives under ~/.claude/)
-        is_global = "/.claude/" in cf.path
-        if normalized_project.startswith(scope) or is_global:
-            matching.append(cf)
-
-    # Sort by scope length (broadest first = shortest path)
-    matching.sort(key=lambda cf: len(cf.scope))
-    return matching
+    path_value = os.environ.get("PATH", "")
+    raise SimulateSessionError(
+        "coderoo command not found. Ensure Coderoo CLI is installed and available in PATH "
+        f"(current PATH: {path_value})."
+    )
 
 
-def _get_docs_include_instructions(agent: Agent) -> list[tuple[str, str]]:
-    """Get instructions configured as auto_inject (docs.include) for this agent."""
-    agent_instructions = AgentInstruction.objects.filter(agent=agent).select_related("instruction")
-    results = []
-    for ai in agent_instructions:
-        if ai.get_effective_mode() == "auto_inject":
-            results.append((ai.instruction.name, ai.instruction.content))
-    return results
+def _prioritize_md_files(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return payload with `md_files` first to improve simulate output readability."""
+    if "md_files" not in payload:
+        return payload
 
-
-def _get_reminder_instructions(agent: Agent) -> list[tuple[str, str]]:
-    """Get instructions configured as on_demand (reminder) for this agent."""
-    agent_instructions = AgentInstruction.objects.filter(agent=agent).select_related("instruction")
-    results = []
-    for ai in agent_instructions:
-        if ai.get_effective_mode() == "on_demand":
-            results.append((ai.instruction.name, ai.instruction.display_name))
-    return results
+    reordered: dict[str, Any] = {"md_files": payload["md_files"]}
+    for key, value in payload.items():
+        if key == "md_files":
+            continue
+        reordered[key] = value
+    return reordered

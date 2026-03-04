@@ -266,6 +266,76 @@ class TestApplyAllEndpoint:
         written = (tmp_path / ".claude" / "agents" / "active-agent.md").read_text()
         assert "## Active Content" in written
 
+    def test_apply_all_delete_from_db(self, api_client, tmp_path):
+        client, user = api_client
+
+        # Create objects to be deleted
+        Agent.objects.create(
+            name="doomed-agent",
+            display_name="Doomed",
+            source="claude",
+            is_active=False,
+            user=user,
+        )
+        Instruction.objects.create(
+            name="doomed-instruction",
+            display_name="Doomed Instruction",
+            content="Remove me",
+            user=user,
+        )
+        ConfigFile.objects.create(
+            path="/tmp/doomed-config.md",
+            content="Remove me too",
+            user=user,
+        )
+
+        # Create objects belonging to another user (should NOT be deleted)
+        other_user = User.objects.create_user(username="other_del", password="pass")
+        Agent.objects.create(
+            name="doomed-agent",
+            display_name="Other Doomed",
+            source="claude",
+            is_active=False,
+            user=other_user,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CLAUDE_AGENTS_DIR",
+                tmp_path / ".claude" / "agents",
+            )
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_CODEROO_AGENTS_DIR",
+                tmp_path / ".coderoo" / "agents",
+            )
+            mp.setattr(
+                "agent_builder.filesystem.DEFAULT_INSTRUCTIONS_DIR",
+                tmp_path / ".claude" / "instructions",
+            )
+            response = client.post(
+                "/agent-builder/api/apply-all/",
+                {
+                    "delete_from_db": [
+                        {"type": "agent", "name": "doomed-agent"},
+                        {"type": "instruction", "name": "doomed-instruction"},
+                        {"type": "config_file", "path": "/tmp/doomed-config.md"},
+                    ]
+                },
+                format="json",
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_from_db"] == 3
+
+        # Verify objects were deleted for the requesting user
+        assert not Agent.objects.filter(user=user, name="doomed-agent").exists()
+        assert not Instruction.objects.filter(user=user, name="doomed-instruction").exists()
+        assert not ConfigFile.objects.filter(user=user, path="/tmp/doomed-config.md").exists()
+
+        # Verify the other user's agent was NOT deleted
+        assert Agent.objects.filter(user=other_user, name="doomed-agent").exists()
+
 
 @pytest.mark.django_db
 class TestInstructionViewSet:

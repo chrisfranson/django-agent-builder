@@ -15,6 +15,7 @@ class SyncStatus(str, Enum):
     CONFLICT = "conflict"  # Both changed -> needs resolution
     NEW_ON_DISK = "new_on_disk"  # Item doesn't exist in DB
     NEW_IN_DB = "new_in_db"  # Item doesn't exist on disk
+    DELETED_ON_DISK = "deleted_on_disk"  # File was synced but now missing from disk
 
 
 def detect_import_status(
