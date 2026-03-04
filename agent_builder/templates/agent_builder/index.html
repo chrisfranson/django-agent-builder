@@ -748,6 +748,22 @@
                                     <i class="bi bi-trash"></i> Delete
                                 </button>
                             </div>
+                            <!-- Project Files Section -->
+                            <hr class="my-3">
+                            <div id="projectFilesSection" class="d-none">
+                                <h6 class="fw-semibold mb-3">
+                                    <i class="bi bi-files text-muted"></i> Project Files
+                                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="loadProjectFiles()" title="Refresh files">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </h6>
+                                <div id="projectFilesContainer">
+                                    <div class="text-center text-muted py-3">
+                                        <div class="spinner-border spinner-border-sm"></div>
+                                        <div class="mt-1 small">Loading files...</div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1644,6 +1660,7 @@
             document.getElementById('docModeBtn').classList.add('d-none');
             document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
             document.getElementById('editorSubtitle').textContent = '';
+            document.getElementById('projectFilesSection').classList.add('d-none');
 
             filterAgents();
             renderProjectList(allProjects);
@@ -1932,6 +1949,7 @@
 
                 // Refresh list to update active state
                 renderProjectList(allProjects);
+                loadProjectFiles();
             } catch (err) {
                 showToast('Failed to load project: ' + err.message, 'error');
             }
@@ -1984,6 +2002,95 @@
             } catch (err) {
                 showToast('Failed to delete project: ' + err.message, 'error');
             }
+        }
+
+        async function loadProjectFiles() {
+            if (!currentProjectId) return;
+
+            const section = document.getElementById('projectFilesSection');
+            const container = document.getElementById('projectFilesContainer');
+            section.classList.remove('d-none');
+
+            container.innerHTML = `
+                <div class="text-center text-muted py-3">
+                    <div class="spinner-border spinner-border-sm"></div>
+                    <div class="mt-1 small">Loading files...</div>
+                </div>`;
+
+            try {
+                const res = await apiFetch(`/agent-builder/api/projects/${currentProjectId}/files/`);
+                if (!res.ok) throw new Error('Failed to load files');
+                const data = await res.json();
+                renderProjectFiles(data.files, container);
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-3">
+                        <i class="bi bi-exclamation-triangle text-warning d-block mb-1"></i>
+                        ${simEscapeHtml(err.message)}
+                    </div>`;
+            }
+        }
+
+        function renderProjectFiles(files, container) {
+            if (!files || files.length === 0) {
+                container.innerHTML = `
+                    <div class="text-muted small py-2">
+                        No config files found in this project directory.
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = '';
+
+            const typeColors = {
+                coderoo_config: 'info',
+                memory_file: 'success',
+            };
+            const typeIcons = {
+                coderoo_config: 'bi-gear',
+                memory_file: 'bi-file-earmark-text',
+            };
+
+            files.forEach((file, i) => {
+                const collapseId = `projectFile${i}`;
+                const color = typeColors[file.type] || 'secondary';
+                const icon = typeIcons[file.type] || 'bi-file-text';
+
+                const card = document.createElement('div');
+                card.className = 'card mb-2';
+                card.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center py-2">
+                        <span>
+                            <button type="button" class="btn btn-sm btn-link p-0 me-2 text-secondary"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                title="Expand/Collapse">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                            <i class="bi ${icon} text-${color} me-2"></i>
+                            <strong>${simEscapeHtml(file.filename)}</strong>
+                            <small class="text-muted ms-2">${simEscapeHtml(file.path)}</small>
+                        </span>
+                        <span class="badge bg-${color}">${file.type.replace(/_/g, ' ')}</span>
+                    </div>
+                    <div class="collapse" id="${collapseId}">
+                        <div class="card-body p-0">
+                            <pre class="mb-0 p-3" style="max-height:400px;overflow:auto;white-space:pre-wrap;font-size:0.85rem;">${simEscapeHtml(file.content)}</pre>
+                        </div>
+                    </div>
+                `;
+
+                const collapseEl = card.querySelector('.collapse');
+                const chevron = card.querySelector('.bi-chevron-right');
+                collapseEl.addEventListener('show.bs.collapse', () => {
+                    chevron.style.transform = 'rotate(90deg)';
+                    chevron.style.transition = 'transform 0.2s';
+                });
+                collapseEl.addEventListener('hide.bs.collapse', () => {
+                    chevron.style.transform = 'rotate(0deg)';
+                });
+
+                container.appendChild(card);
+            });
         }
 
         function openCreateProjectModal() {

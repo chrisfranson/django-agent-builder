@@ -396,6 +396,53 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.soft_delete()
 
+    @action(detail=True, methods=["get"])
+    def files(self, request, pk=None):
+        """Read config and memory files from a project directory."""
+        from pathlib import Path as _Path
+
+        project = self.get_object()
+        project_dir = _Path(project.path)
+
+        if not project_dir.is_dir():
+            return Response({"detail": "Project directory not found"}, status=404)
+
+        files = []
+
+        coderoo_config = project_dir / ".coderoo" / "coderoo.config.json5"
+        if coderoo_config.is_file():
+            try:
+                files.append(
+                    {
+                        "filename": "coderoo.config.json5",
+                        "path": str(coderoo_config),
+                        "content": coderoo_config.read_text(),
+                        "type": "coderoo_config",
+                    }
+                )
+            except Exception:
+                pass
+
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            filepath = project_dir / name
+            if filepath.is_file():
+                try:
+                    resolved = str(filepath.resolve())
+                    cf = ConfigFile.objects.filter(user=request.user, path=resolved).first()
+                    files.append(
+                        {
+                            "filename": name,
+                            "path": resolved,
+                            "content": filepath.read_text(),
+                            "type": "memory_file",
+                            "config_file_id": cf.id if cf else None,
+                        }
+                    )
+                except Exception:
+                    pass
+
+        return Response({"project_id": project.id, "files": files})
+
 
 @api_view(["GET", "PATCH"])
 @perm_classes([IsAuthenticated])
