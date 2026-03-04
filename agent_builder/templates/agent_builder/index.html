@@ -649,8 +649,8 @@
                         <!-- Empty State -->
                         <div id="emptyState" class="empty-state">
                             <i class="bi bi-file-earmark-code"></i>
-                            <h5>No agent selected</h5>
-                            <p class="text-muted">Select an agent from the list or create a new one</p>
+                            <h5 id="emptyStateTitle">No agent selected</h5>
+                            <p class="text-muted" id="emptyStateDesc">Select an agent from the list or create a new one</p>
                             <div class="mt-3">
                                 <small class="text-muted">
                                     <span class="kbd">Ctrl+K</span> Search &nbsp;
@@ -1039,6 +1039,39 @@
         </div>
     </div>
 
+    <!-- Create config file modal -->
+    <div class="modal fade" id="createConfigFileModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-file-earmark-plus"></i> New Memory File
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="createConfigFilePath" class="form-label">File Path</label>
+                        <input type="text" class="form-control" id="createConfigFilePath"
+                               placeholder="/path/to/CLAUDE.md">
+                        <div class="form-text">Absolute path where the file will be created.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="createConfigFileContent" class="form-label">Content</label>
+                        <textarea class="form-control" id="createConfigFileContent" rows="6"
+                                  placeholder="# Instructions"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="submitCreateConfigFile()">
+                        Create
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Keyboard shortcuts modal -->
     <div class="modal fade" id="shortcutsModal" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
@@ -1128,6 +1161,19 @@
             return fetch(url, { ...defaults, ...options, headers: { ...defaults.headers, ...options.headers } });
         }
 
+        function updateEmptyState(tab) {
+            const labels = {
+                agents:   { title: 'No agent selected',   desc: 'Select an agent from the list or create a new one',   item: 'an agent' },
+                projects: { title: 'No project selected',  desc: 'Select a project from the list or create a new one',  item: 'a project' },
+                memory:   { title: 'No file selected',     desc: 'Select a file from the list or create a new one',     item: 'a file' },
+            };
+            const l = labels[tab] || labels.agents;
+            document.getElementById('emptyStateTitle').textContent = l.title;
+            document.getElementById('emptyStateDesc').textContent = l.desc;
+            document.getElementById('editorTitle').innerHTML = `<span class="text-muted">Select ${l.item}</span>`;
+            document.getElementById('editorSubtitle').textContent = '';
+        }
+
         let _saveTabTimeout;
         function saveTabState(tab, subTab) {
             // When switching away from projects, clear project selection
@@ -1135,12 +1181,11 @@
                 currentProjectId = null;
                 document.getElementById('projectEditor').classList.add('d-none');
                 document.getElementById('emptyState').classList.remove('d-none');
-                document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
-                document.getElementById('editorSubtitle').textContent = '';
+                updateEmptyState(tab);
                 renderProjectList(allProjects);
             }
-            // When switching to projects, clear agent/config selection
-            if (tab === 'projects' && (currentAgentId || currentConfigFileId)) {
+            // When switching to projects or memory, clear agent/config selection
+            if ((tab === 'projects' || tab === 'memory') && (currentAgentId || currentConfigFileId)) {
                 currentAgentId = null;
                 currentAgent = null;
                 currentSource = null;
@@ -1154,9 +1199,25 @@
                 document.getElementById('simulateBtn').classList.add('d-none');
                 document.getElementById('viewModeGroup').classList.add('d-none');
                 document.getElementById('docModeBtn').classList.add('d-none');
-                document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select a project</span>';
-                document.getElementById('editorSubtitle').textContent = '';
+                updateEmptyState(tab);
                 filterAgents();
+            }
+            // When switching to agents, clear project/config selection
+            if (tab === 'agents' && (currentProjectId || currentConfigFileId)) {
+                currentProjectId = null;
+                currentConfigFileId = null;
+                clearUnsaved();
+                document.getElementById('projectEditor').classList.add('d-none');
+                document.getElementById('editorContent').classList.add('d-none');
+                document.getElementById('emptyState').classList.remove('d-none');
+                document.getElementById('saveBtn').classList.add('d-none');
+                document.getElementById('applyOneBtn').classList.add('d-none');
+                document.getElementById('deleteBtn').classList.add('d-none');
+                document.getElementById('simulateBtn').classList.add('d-none');
+                document.getElementById('viewModeGroup').classList.add('d-none');
+                document.getElementById('docModeBtn').classList.add('d-none');
+                updateEmptyState(tab);
+                renderProjectList(allProjects);
             }
             clearTimeout(_saveTabTimeout);
             _saveTabTimeout = setTimeout(async () => {
@@ -1588,6 +1649,39 @@
             }
         }
 
+        function openCreateConfigFileModal() {
+            document.getElementById('createConfigFilePath').value = '';
+            document.getElementById('createConfigFileContent').value = '';
+            new bootstrap.Modal(document.getElementById('createConfigFileModal')).show();
+        }
+
+        async function submitCreateConfigFile() {
+            const path = document.getElementById('createConfigFilePath').value.trim();
+            const content = document.getElementById('createConfigFileContent').value;
+            if (!path) {
+                showToast('File path is required', 'error');
+                return;
+            }
+            const filename = path.split('/').pop();
+            try {
+                const res = await apiFetch('/agent-builder/api/config-files/', {
+                    method: 'POST',
+                    body: JSON.stringify({ filename, path, content }),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || JSON.stringify(err));
+                }
+                const cf = await res.json();
+                bootstrap.Modal.getInstance(document.getElementById('createConfigFileModal')).hide();
+                showToast(`Created ${filename}`, 'success');
+                await loadConfigFiles();
+                selectConfigFile(cf.id);
+            } catch (err) {
+                showToast('Failed to create file: ' + err.message, 'error');
+            }
+        }
+
         async function selectAgent(id, name, source) {
             if (hasUnsavedChanges && !confirm('You have unsaved changes. Discard them?')) {
                 return;
@@ -1692,9 +1786,12 @@
             document.getElementById('simulateBtn').classList.add('d-none');
             document.getElementById('viewModeGroup').classList.add('d-none');
             document.getElementById('docModeBtn').classList.add('d-none');
-            document.getElementById('editorTitle').innerHTML = '<span class="text-muted">Select an agent</span>';
-            document.getElementById('editorSubtitle').textContent = '';
             document.getElementById('projectFilesSection').classList.add('d-none');
+
+            // Determine active tab and update empty state accordingly
+            const activePane = document.querySelector('#agentsTab.active, #projectsTab.active, #memoryTab.active');
+            const activeTab = activePane ? activePane.id.replace('Tab', '') : 'agents';
+            updateEmptyState(activeTab);
 
             filterAgents();
             renderProjectList(allProjects);
