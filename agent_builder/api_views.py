@@ -1091,6 +1091,7 @@ def apply_all(request):
     allowed_config_paths = set(
         ConfigFile.all_objects.filter(user=request.user).values_list("path", flat=True)
     )
+    coderoo_dir_str = str(DEFAULT_CODEROO_AGENTS_DIR)
     for item in delete_from_disk:
         try:
             target = _Path(item["path"]).resolve()
@@ -1099,9 +1100,24 @@ def apply_all(request):
             is_allowed = any(target_str.startswith(d) for d in allowed_dirs) or (
                 target_str in allowed_config_paths
             )
-            if is_allowed and target.exists() and target.is_file():
+            if not is_allowed:
+                continue
+
+            if target.exists() and target.is_file():
                 target.unlink()
                 deleted_from_disk_count += 1
+
+            # For coderoo agents: also clean up sibling .json5 and empty folder
+            if target_str.startswith(coderoo_dir_str) and target.suffix == ".md":
+                json5_sibling = target.with_suffix(".json5")
+                if json5_sibling.exists() and json5_sibling.is_file():
+                    json5_sibling.unlink()
+                agent_folder = target.parent
+                if agent_folder != _Path(coderoo_dir_str) and agent_folder.exists():
+                    try:
+                        agent_folder.rmdir()  # Only succeeds if empty
+                    except OSError:
+                        pass
         except Exception:
             pass  # Skip items that fail to delete
 
